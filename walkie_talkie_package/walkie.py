@@ -292,8 +292,15 @@ def _strip_comments(code: str, file_ext: str) -> str:
         
         if not in_single_str and code[i] in ('"', "'"):
             in_single_str = code[i]
-        elif in_single_str and code[i] == in_single_str and (i == 0 or code[i-1] != '\\'):
-            in_single_str = None
+        elif in_single_str and code[i] == in_single_str:
+            # Count preceding backslashes to check for true escape
+            backslash_count = 0
+            j = i - 1
+            while j >= 0 and code[j] == '\\':
+                backslash_count += 1
+                j -= 1
+            if backslash_count % 2 == 0:
+                in_single_str = None
         
         result.append(code[i])
         i += 1
@@ -310,7 +317,8 @@ def _strip_comments(code: str, file_ext: str) -> str:
 
 def safe_print(text: str, fg: Optional[str] = None, nl: bool = True, err: bool = False):
     """Safely print text to stdout/stderr replacing characters not supported by the console encoding."""
-    encoding = sys.stdout.encoding or 'utf-8' if not err else sys.stderr.encoding or 'utf-8'
+    stream = sys.stderr if err else sys.stdout
+    encoding = getattr(stream, 'encoding', None) or 'utf-8'
     encoded = text.encode(encoding, errors='replace')
     decoded = encoded.decode(encoding)
     click.secho(decoded, fg=fg, nl=nl, err=err)
@@ -462,8 +470,8 @@ def log_interaction(
     if no_log:
         return None, None
 
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    safe_model = model.replace("/", "-").replace(":", "-")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    safe_model = re.sub(r'[^\w.\-]+', '-', model)[:80]
 
     log_data = {
         "timestamp": timestamp,
@@ -491,9 +499,12 @@ def log_interaction(
             f.write(f"**Model:** {model}\n\n")
             
             # Determine dynamic fence length to avoid breaking markdown code blocks if contents contain backticks
-            max_fences = full_prompt.count("```")
-            sys_fences = system.count("```") if system else 0
-            fence_len = 3 + max(max_fences, sys_fences)
+            contents_combined = full_prompt + "\n" + (system or "") + "\n" + reply
+            max_backticks = 0
+            for match in re.finditer(r'`+', contents_combined):
+                if len(match.group()) > max_backticks:
+                    max_backticks = len(match.group())
+            fence_len = max(3, max_backticks + 1)
             fence_str = "`" * fence_len
 
             if system:
@@ -1033,6 +1044,9 @@ def map(output, exclude):
                 modules_list.append(module_name)
                 
                 try:
+                    # Skip parsing files larger than 1MB to prevent OOM
+                    if filepath.stat().st_size > 1_000_000:
+                        raise ValueError("File size exceeds 1MB limit")
                     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                         code = f.read()
                     
