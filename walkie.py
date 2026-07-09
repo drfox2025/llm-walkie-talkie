@@ -649,7 +649,9 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
 @click.option('--dry-run', is_flag=True, help="Compile changes and show them without saving to disk.")
 @click.option('--no-log', is_flag=True, help="Disable interaction logging.")
 @click.option('--retries', '-r', type=int, default=3, help="Number of automatic self-correction retries if patching fails.")
-def consult(file, task, model, system, attach, dry_run, no_log, retries):
+@click.option('--line-range', '-L', help="Line range in format start-end (e.g. 100-150) to target, saving tokens by omitting the rest of the file context.")
+@click.option('--verify-model', '-V', help="Secondary model name to use as an independent code auditor to cross-check patches for hallucinations.")
+def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model):
     """Automate surgical patching of files with a self-correcting model feedback harness."""
     try:
         with open(file, 'r', encoding='utf-8') as f:
@@ -657,6 +659,32 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries):
     except Exception as e:
         click.secho(f"Error reading target file {file}: {str(e)}", fg="red", err=True)
         sys.exit(1)
+
+    # Line Range Parsing & Chunk Extraction
+    start_line = None
+    end_line = None
+    targeted_content = file_content
+    lines = file_content.splitlines()
+
+    if line_range:
+        try:
+            start_str, end_str = line_range.split('-')
+            start_line = int(start_str.strip())
+            end_line = int(end_str.strip())
+            if start_line < 1 or end_line < start_line:
+                raise ValueError("Line numbers must be positive and start_line <= end_line.")
+            
+            # Clamp end_line to the file length
+            end_line = min(end_line, len(lines))
+            
+            # Extract range with 5 context lines before and after
+            start_idx = max(0, start_line - 1 - 5)
+            end_idx = min(len(lines), end_line + 5)
+            targeted_content = "\n".join(lines[start_idx:end_idx])
+            click.secho(f"Targeting line range {start_line}-{end_line} (context window size: {end_idx - start_idx} lines)", fg="cyan", err=True)
+        except Exception as e:
+            click.secho(f"Error parsing --line-range '{line_range}': {str(e)}. Using entire file.", fg="yellow", err=True)
+            line_range = None
 
     system_prompt = system or (
         "You are a coding assistant designed to automatically apply surgical patches to source code files. "
@@ -670,12 +698,22 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries):
         "Provide one block per intended change. Ensure the exact original code block matches the source file perfectly, "
         "including all whitespaces, tabs, and newlines."
     )
+    if line_range:
+        system_prompt += (
+            f"\n\nCRITICAL: You are viewing a localized segment (lines {start_line}-{end_line}) of the larger file '{Path(file).name}'. "
+            "Do not add new imports or redeclare classes/functions that are defined globally. Focus ONLY on modifying this segment in place. "
+            "Assume all global imports and variables are already available."
+        )
 
     full_prompt = (
         f"Task: {task}\n\n"
         f"Target File: {file}\n"
+    )
+    if line_range:
+        full_prompt += f"Target Line Range: {start_line}-{end_line}\n"
+    full_prompt += (
         "```\n"
-        f"{file_content}\n"
+        f"{targeted_content}\n"
         "```\n"
     )
 
@@ -757,19 +795,47 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries):
                 "<<<< REPLACEMENT_END >>>>"
             )
         else:
-            modified_content = file_content
-            total_replacements = 0
-            for original_block, new_block in matches:
-                if original_block not in modified_content:
-                    error_feedback = (
-                        f"Error: The following original block was not found in the file:\n"
-                        f"```\n{original_block}\n```\n"
-                        f"Please ensure you match the original source code lines exactly, "
-                        f"including all indentation, spaces, and formatting."
-                    )
-                    break
-                modified_content = modified_content.replace(original_block, new_block, 1)
-                total_replacements += 1
+            if line_range:
+                # Target range mapping
+                start_idx = max(0, start_line - 1 - 5)
+                end_idx = min(len(lines), end_line + 5)
+                segment_content = "\n".join(lines[start_idx:end_idx])
+                
+                for original_block, new_block in matches:
+                    if original_block not in segment_content:
+                        error_feedback = (
+                            f"Error: The following original block was not found in targeted line range segment ({start_line}-{end_line}):\n"
+                            f"```\n{original_block}\n```\n"
+                            f"Please ensure you only target and replace code lines strictly within this line range."
+                        )
+                        break
+                    segment_content = segment_content.replace(original_block, new_block, 1)
+                    total_replacements += 1
+                
+                if not error_feedback:
+                    # Reconstruct complete modified content
+                    header = "\n".join(lines[:start_idx])
+                    footer = "\n".join(lines[end_idx:])
+                    modified_content = ""
+                    if header:
+                        modified_content += header + "\n"
+                    modified_content += segment_content
+                    if footer:
+                        modified_content += "\n" + footer
+            else:
+                # Global file content mapping
+                modified_content = file_content
+                for original_block, new_block in matches:
+                    if original_block not in modified_content:
+                        error_feedback = (
+                            f"Error: The following original block was not found in the file:\n"
+                            f"```\n{original_block}\n```\n"
+                            f"Please ensure you match the original source code lines exactly, "
+                            f"including all indentation, spaces, and formatting."
+                        )
+                        break
+                    modified_content = modified_content.replace(original_block, new_block, 1)
+                    total_replacements += 1
 
             if not error_feedback:
                 # Syntax Check based on file extension
@@ -783,6 +849,103 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries):
                             f"{str(se)}\n"
                             f"The proposed code changes introduced this syntax issue. Please correct the syntax."
                         )
+
+            # Hallucination Cross-Checking Auditor Call
+            if not error_feedback and verify_model:
+                click.secho(f"Cross-checking patch with auditor model {verify_model} to prevent hallucinations...", fg="yellow", err=True)
+                
+                routed_verify_model, v_api_base, v_api_key = route_model(verify_model)
+                
+                verify_system = (
+                    "You are an independent, strict code auditor. Your job is to review a proposed surgical patch for correctness "
+                    "and to check for hallucinations (such as references to undefined variables, functions, packages, or incorrect logic).\n"
+                )
+                if line_range:
+                    verify_system += (
+                        f"NOTE: The patch targets a localized segment (lines {start_line}-{end_line}) of the file '{Path(file).name}'. "
+                        "Ignore missing global imports or global definitions; focus only on local scope violations, syntax correctness, "
+                        "and logic errors within the provided changes."
+                    )
+                
+                verify_prompt = (
+                    f"Task context: {task}\n"
+                    f"Target file: {Path(file).name}\n\n"
+                    "Please review the proposed change blocks below:\n"
+                )
+                for idx, (orig, rep) in enumerate(matches, 1):
+                    verify_prompt += (
+                        f"--- Change Block #{idx} ---\n"
+                        f"Original Code:\n```\n{orig}\n```\n"
+                        f"Proposed Replacement:\n```\n{rep}\n```\n"
+                    )
+                verify_prompt += (
+                    "\nCheck for:\n"
+                    "1. Code Hallucinations: Undefined variables/functions, wrong imports, or non-existent library dependencies.\n"
+                    "2. Indentation/Scope issues.\n\n"
+                    "Does this patch pass review? Respond strictly in JSON format matching this schema:\n"
+                    "{\n"
+                    '  "verdict": "PASS" or "FAIL",\n'
+                    '  "reason": "Detailed description of issues if FAIL, or empty string if PASS"\n'
+                    "}\n"
+                    "Do not include any conversational text or explanation outside of this JSON block."
+                )
+                
+                verify_messages = [
+                    {"role": "system", "content": verify_system},
+                    {"role": "user", "content": verify_prompt}
+                ]
+                
+                v_kwargs = {"model": routed_verify_model, "messages": verify_messages, "max_tokens": 150}
+                if v_api_base:
+                    v_kwargs["api_base"] = v_api_base
+                if v_api_key:
+                    v_kwargs["api_key"] = v_api_key
+                
+                try:
+                    v_response = litellm.completion(**v_kwargs)
+                    reply_verify = v_response.choices[0].message.content.strip()
+                    
+                    try:
+                        # Extract JSON block in case the model wraps it in markdown code fences
+                        json_content = reply_verify
+                        if "```json" in json_content:
+                            json_content = json_content.split("```json", 1)[1].split("```", 1)[0]
+                        elif "```" in json_content:
+                            json_content = json_content.split("```", 1)[1].split("```", 1)[0]
+                        json_content = json_content.strip()
+                        
+                        import json as json_lib
+                        verify_data = json_lib.loads(json_content)
+                        verdict = verify_data.get("verdict", "").strip().upper()
+                        reason = verify_data.get("reason", "").strip()
+                        
+                        if verdict == "FAIL":
+                            error_feedback = f"Auditor Review Failed (Hallucination/Logic Check): {reason}"
+                            click.secho(f"Auditor flagged failure: {reason}", fg="red", err=True)
+                        elif verdict == "PASS":
+                            click.secho("Auditor verification passed successfully!", fg="green", err=True)
+                        else:
+                            raise ValueError(f"Invalid verdict '{verdict}'")
+                    except Exception as je:
+                        # Fallback text parsing
+                        click.secho(f"Warning: JSON parsing failed for auditor response: {str(je)}. Falling back to text parsing.", fg="yellow", err=True)
+                        verdict_match = re.search(r"\[VERDICT\]\s*(PASS|FAIL)(?::?\s*(.*))?", reply_verify, re.IGNORECASE)
+                        if verdict_match:
+                            status = verdict_match.group(1).upper()
+                            reason = verdict_match.group(2) or "Auditor review failed."
+                            if status == "FAIL":
+                                error_feedback = f"Auditor Review Failed (Hallucination/Logic Check): {reason}"
+                                click.secho(f"Auditor flagged failure: {reason}", fg="red", err=True)
+                            else:
+                                click.secho("Auditor verification passed successfully!", fg="green", err=True)
+                        else:
+                            if "fail" in reply_verify.lower() or "error" in reply_verify.lower():
+                                error_feedback = f"Auditor Review Failed: {reply_verify}"
+                                click.secho(f"Auditor flagged failure: {reply_verify}", fg="red", err=True)
+                            else:
+                                click.secho("Auditor verification passed (implicit success)!", fg="green", err=True)
+                except Exception as ve:
+                    click.secho(f"Warning: Verification call to {verify_model} failed: {str(ve)}. Proceeding anyway.", fg="yellow", err=True)
 
         if not error_feedback:
             # Success!
