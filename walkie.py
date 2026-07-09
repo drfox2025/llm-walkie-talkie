@@ -334,6 +334,175 @@ _KEY_PATTERNS = [
     re.compile(r"sk-[a-zA-Z0-9_-]{20,}"),
 ]
 
+EXPERIENCE_PATH = CONFIG_DIR / "llm_experience.yaml"
+EXPERIENCE_VERSION = 1
+EXPERIENCE_MAX_ENTRIES = 20
+EXPERIENCE_MAX_LESSONS = 3
+EXPERIENCE_MIN_CONFIDENCE = 0.6
+EXPERIENCE_SAVE_MIN_CONFIDENCE = 0.7
+EXPERIENCE_LESSON_MAX_LEN = 120
+
+_ERROR_CATEGORIES = {
+    "whitespace_mismatch": re.compile(
+        r"(?i)(original block not found|whitespace|indentation|tab|spaces?)"
+    ),
+    "syntax_violation": re.compile(
+        r"(?i)(syntax\s*error|invalid syntax|unexpected indent|expected )"
+    ),
+    "format_violation": re.compile(
+        r"(?i)(no valid replacement|expected format|REPLACEMENT_)"
+    ),
+    "scope_error": re.compile(
+        r"(?i)(undefined|not defined|nameerror|import missing|out of scope)"
+    ),
+    "logic_hallucination": re.compile(
+        r"(?i)(hallucin|auditor.*fail|incorrect logic|wrong assumption)"
+    ),
+}
+
+_LESSON_TEMPLATES = {
+    "whitespace_mismatch": "Preserve exact original whitespace (spaces/tabs/trailing) in REPLACEMENT_START.",
+    "syntax_violation": "REPLACEMENT_WITH must be syntactically valid for the language before emit.",
+    "format_violation": "Emit only REPLACEMENT_START / WITH / END blocks; no prose outside them.",
+    "scope_error": "Do not invent symbols; only use names present in the provided file segment.",
+    "logic_hallucination": "Match task literally; do not change unrelated logic or invent APIs.",
+}
+
+def abstract_lesson(error_feedback: str, attempts_needed: int, file_ext: str) -> Optional[Dict[str, Any]]:
+    """Map error text to category lesson. No raw strings persisted."""
+    if not error_feedback or attempts_needed < 1:
+        return None
+    ext = file_ext.lower().lstrip(".")
+    for category, pat in _ERROR_CATEGORIES.items():
+        if pat.search(error_feedback):
+            base = _LESSON_TEMPLATES[category]
+            if ext and ext not in base:
+                lesson = f"{ext}: {base}"
+            else:
+                lesson = base
+            lesson = lesson[:EXPERIENCE_LESSON_MAX_LEN]
+            confidence = min(1.0, 0.5 + 0.1 * attempts_needed)
+            return {
+                "category": category,
+                "lesson": lesson,
+                "confidence": confidence,
+                "attempts_needed": attempts_needed,
+            }
+    return None
+
+def load_experience_prompt(file_ext: str, max_lessons: int = EXPERIENCE_MAX_LESSONS, min_confidence: float = EXPERIENCE_MIN_CONFIDENCE) -> str:
+    """Top-N lessons by score = count * confidence. Empty string if none."""
+    if not EXPERIENCE_PATH.exists():
+        return ""
+    try:
+        import yaml
+        data = yaml.safe_load(EXPERIENCE_PATH.read_text(encoding="utf-8")) or {}
+        if data.get("version") != EXPERIENCE_VERSION:
+            return ""
+        patterns = (data.get("patterns") or {}).get(file_ext.lower().lstrip("."), {})
+        if not patterns:
+            return ""
+        scored = []
+        for _cat, details in patterns.items():
+            conf = float(details.get("confidence", 0))
+            if conf < min_confidence:
+                continue
+            lesson = str(details.get("lesson", "")).strip()
+            if not lesson or len(lesson) > EXPERIENCE_LESSON_MAX_LEN + 20:
+                continue
+            score = int(details.get("count", 1)) * conf
+            scored.append((score, lesson))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        selected = [L for _, L in scored[:max_lessons]]
+        if not selected:
+            return ""
+        return (
+            "\n\n### Critical Patterns (past failures - avoid):\n"
+            + "\n".join(f"- {L}" for L in selected)
+        )
+    except Exception:
+        return ""
+
+def save_experience(file_ext: str, lesson_data: Dict[str, Any]) -> None:
+    """Upsert category; LRU-evict lowest confidence if over max_entries."""
+    if not lesson_data or lesson_data.get("confidence", 0) < EXPERIENCE_SAVE_MIN_CONFIDENCE:
+        return
+    ext = file_ext.lower().lstrip(".")
+    category = lesson_data.get("category")
+    if category not in _LESSON_TEMPLATES:
+        return
+    try:
+        import yaml
+        data = {
+            "version": EXPERIENCE_VERSION,
+            "max_entries": EXPERIENCE_MAX_ENTRIES,
+            "patterns": {},
+        }
+        if EXPERIENCE_PATH.exists():
+            loaded = yaml.safe_load(EXPERIENCE_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("version") == EXPERIENCE_VERSION:
+                data = loaded
+        data.setdefault("patterns", {})
+        data["patterns"].setdefault(ext, {})
+        bucket = data["patterns"][ext]
+        today = datetime.date.today().isoformat()
+
+        if category in bucket:
+            existing = bucket[category]
+            existing["count"] = int(existing.get("count", 0)) + 1
+            existing["confidence"] = max(
+                float(existing.get("confidence", 0)),
+                float(lesson_data.get("confidence", 0.5)),
+            )
+            existing["last_seen"] = today
+            existing["lesson"] = str(existing.get("lesson") or lesson_data["lesson"])[:EXPERIENCE_LESSON_MAX_LEN]
+        else:
+            total = sum(len(p) for p in data["patterns"].values())
+            if total >= int(data.get("max_entries", EXPERIENCE_MAX_ENTRIES)):
+                worst = None
+                for e, pats in data["patterns"].items():
+                    for c, d in pats.items():
+                        key = (
+                            float(d.get("confidence", 0)),
+                            str(d.get("last_seen", "")),
+                            e,
+                            c,
+                        )
+                        if worst is None or key < worst:
+                            worst = key
+                if worst:
+                    _, _, we, wc = worst
+                    del data["patterns"][we][wc]
+                    if not data["patterns"][we]:
+                        del data["patterns"][we]
+            bucket[category] = {
+                "lesson": str(lesson_data["lesson"])[:EXPERIENCE_LESSON_MAX_LEN],
+                "count": 1,
+                "confidence": float(lesson_data.get("confidence", 0.5)),
+                "last_seen": today,
+            }
+
+        data["version"] = EXPERIENCE_VERSION
+        data["max_entries"] = EXPERIENCE_MAX_ENTRIES
+        data["updated"] = today
+
+        tmp = EXPERIENCE_PATH.with_suffix(".yaml.tmp")
+        tmp.write_text(
+            yaml.dump(data, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
+        tmp.replace(EXPERIENCE_PATH)
+        if os.name != "nt" and EXPERIENCE_PATH.exists():
+            os.chmod(EXPERIENCE_PATH, 0o600)
+    except Exception as e:
+        click.secho(
+            f"Warning: Could not save experience: {safe_error_handler(e)}",
+            fg="yellow",
+            err=True,
+        )
+
 def safe_error_handler(e: Exception) -> str:
     """Regex-scrub API keys from errors to prevent accidental credential leakage in logs or console."""
     msg = str(e)
@@ -778,7 +947,8 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
 @click.option('--verify-model', '-V', help="Secondary model name to use as an independent code auditor to cross-check patches for hallucinations.")
 @click.option('--chain-model', '-c', multiple=True, help="Sequential models after the primary model to refine changes.")
 @click.option('--keep-comments', is_flag=True, help="Disable comment stripping (comments are stripped by default).")
-def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments):
+@click.option('--no-experience', is_flag=True, help="Disable experience learning and loading lessons from past sessions.")
+def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments, no_experience):
     """Automate surgical patching of files with a self-correcting model feedback harness."""
     # Sanitize inputs to prevent path traversal
     s_file = sanitize_path(file)
@@ -793,6 +963,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
     start_line = None
     end_line = None
     targeted_content = file_content
+    file_ext = Path(s_file).suffix.lower().lstrip(".")
 
     if line_range:
         try:
@@ -828,6 +999,9 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             "Do not add new imports or redeclare classes/functions that are defined globally. Focus ONLY on modifying this segment in place. "
             "Assume all global imports and variables are already available."
         )
+
+    if not no_experience:
+        system_prompt += load_experience_prompt(file_ext)
 
     base_user_prompt = f"Task: {task}\n\nTarget File: {s_file}\n"
     if line_range:
@@ -885,6 +1059,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
         ]
 
         attempt = 0
+        last_error_for_learning = None
         while attempt <= retries:
             if attempt > 0:
                 click.secho(f"Retrying chain step {chain_m} (Attempt {attempt}/{retries})...", fg="yellow", err=True)
@@ -951,6 +1126,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
 
             if error_feedback:
                 click.secho(f"Patch verification failed on attempt: {error_feedback}", fg="red", err=True)
+                last_error_for_learning = error_feedback
                 if attempt < retries:
                     messages.append({"role": "assistant", "content": reply})
                     messages.append({
@@ -964,6 +1140,11 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
                     sys.exit(1)
 
             # Success at this step
+            if attempt > 0 and last_error_for_learning and not no_experience:
+                lesson = abstract_lesson(last_error_for_learning, attempt, file_ext)
+                if lesson:
+                    save_experience(file_ext, lesson)
+
             if not is_final:
                 working_content = candidate_content
                 # Save compact diff log for the next model
