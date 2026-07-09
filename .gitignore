@@ -22,6 +22,8 @@ logs/
 *.zip
 scratch/
 test_*.py
+llm_context.yaml
+llm_context.yml
 
 # OS Files
 .DS_Store

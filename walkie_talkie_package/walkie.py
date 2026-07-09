@@ -308,6 +308,13 @@ def _strip_comments(code: str, file_ext: str) -> str:
             non_empty_lines.append("")
     return "\n".join(non_empty_lines).strip()
 
+def safe_print(text: str, fg: Optional[str] = None, nl: bool = True, err: bool = False):
+    """Safely print text to stdout/stderr replacing characters not supported by the console encoding."""
+    encoding = sys.stdout.encoding or 'utf-8' if not err else sys.stderr.encoding or 'utf-8'
+    encoded = text.encode(encoding, errors='replace')
+    decoded = encoded.decode(encoding)
+    click.secho(decoded, fg=fg, nl=nl, err=err)
+
 def route_model(model: str) -> Tuple[str, Optional[str], Optional[str]]:
     """Dynamically route model based on global PROVIDERS config mapping keys."""
     api_base = None
@@ -587,7 +594,7 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
                         if content_chunk:
                             chunks.append(content_chunk)
                             if not json_output:
-                                click.echo(content_chunk, nl=False)
+                                safe_print(content_chunk, nl=False)
                 except Exception:
                     pass
 
@@ -622,7 +629,7 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
             if not stream:
                 if sys.stdout.isatty():
                     click.echo("-" * 40)
-                click.echo(reply)
+                safe_print(reply)
                 if sys.stdout.isatty():
                     click.echo("-" * 40)
         else:
@@ -969,7 +976,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
         click.secho("Changes were successfully matched and parsed but not saved to disk.", fg="yellow")
         click.secho(f"Total patches applied: {total_replacements}", fg="cyan")
         click.echo("\n" + "="*40 + " Proposed File Content " + "="*40 + "\n")
-        click.echo(modified_content)
+        safe_print(modified_content)
         click.echo("\n" + "="*40 + " End of Proposed Content " + "="*40)
     else:
         try:
@@ -979,6 +986,123 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
         except Exception as e:
             click.secho(f"Error saving file {file}: {str(e)}", fg="red", err=True)
             sys.exit(1)
+@cli.command()
+@click.option('--output', '-o', default="llm_context.yaml", help="Path to write the generated project map.")
+@click.option('--exclude', '-e', multiple=True, help="Glob patterns of files/directories to exclude.")
+def map(output, exclude):
+    """Generate a highly compressed, token-efficient YAML map of the codebase for LLMs."""
+    import fnmatch
+    excludes = list(exclude) if exclude else [
+        ".git", "__pycache__", "node_modules", "build", "dist", 
+        ".walkie", "walkie_talkie.zip", "logs", "*.egg-info", "*.pyc"
+    ]
+    
+    root_path = Path.cwd()
+    project_map = {
+        "project_name": root_path.name,
+        "directory_structure": [],
+        "python_modules": {},
+        "config_files": {},
+        "dependencies": [],
+        "mermaid_dependencies": ""
+    }
+    
+    modules_list = []
+    imports_map = {}
+    
+    click.secho("Scanning workspace...", fg="yellow", err=True)
+    
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        rel_dir = Path(dirpath).relative_to(root_path)
+        
+        # Filter directories in place
+        dirnames[:] = [d for d in dirnames if not any(fnmatch.fnmatch(d, pat) for pat in excludes)]
+        
+        for filename in filenames:
+            if any(fnmatch.fnmatch(filename, pat) for pat in excludes):
+                continue
+            
+            filepath = Path(dirpath) / filename
+            rel_filepath = filepath.relative_to(root_path)
+            rel_str = str(rel_filepath).replace("\\", "/")
+            
+            project_map["directory_structure"].append(rel_str)
+            
+            if filename.endswith(".py"):
+                module_name = filepath.stem
+                modules_list.append(module_name)
+                
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        code = f.read()
+                    
+                    import ast as ast_lib
+                    tree = ast_lib.parse(code)
+                    module_info = {
+                        "classes": [],
+                        "functions": [],
+                        "imports": []
+                    }
+                    
+                    for node in ast_lib.walk(tree):
+                        if isinstance(node, ast_lib.ClassDef):
+                            methods = [n.name for n in node.body if isinstance(n, ast_lib.FunctionDef)]
+                            module_info["classes"].append({
+                                "name": node.name,
+                                "methods": methods
+                            })
+                    
+                    for child in tree.body:
+                        if isinstance(child, ast_lib.FunctionDef):
+                            module_info["functions"].append(child.name)
+                        elif isinstance(child, ast_lib.Import):
+                            for name in child.names:
+                                module_info["imports"].append(name.name)
+                        elif isinstance(child, ast_lib.ImportFrom):
+                            if child.module:
+                                module_info["imports"].append(child.module)
+                    
+                    imports_map[module_name] = module_info["imports"]
+                    project_map["python_modules"][rel_str] = {
+                        "classes": module_info["classes"],
+                        "functions": module_info["functions"]
+                    }
+                except Exception as e:
+                    project_map["python_modules"][rel_str] = {
+                        "error": f"Failed to parse AST: {str(e)}"
+                    }
+            
+            elif filename in ("requirements.txt", "pyproject.toml"):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    project_map["config_files"][filename] = content.splitlines()[:15]
+                except Exception:
+                    pass
+    
+    # Build Mermaid dependency flow
+    mermaid_lines = ["graph TD"]
+    has_edges = False
+    for mod, imps in imports_map.items():
+        for imp in imps:
+            base_imp = imp.split('.')[0]
+            if base_imp in modules_list and base_imp != mod:
+                mermaid_lines.append(f"    {mod} --> {base_imp}")
+                has_edges = True
+                
+    if has_edges:
+        project_map["mermaid_dependencies"] = "\n".join(mermaid_lines)
+    else:
+        project_map["mermaid_dependencies"] = "graph TD\n    NoLocalDependencies"
+        
+    try:
+        import yaml as yaml_lib
+        with open(output, 'w', encoding='utf-8') as f:
+            yaml_lib.dump(project_map, f, sort_keys=False)
+        click.secho(f"Success! Codebase map saved to {output}", fg="green")
+    except Exception as e:
+        click.secho(f"Error saving project map: {str(e)}", fg="red", err=True)
+        sys.exit(1)
 
 if __name__ == '__main__':
     cli()
