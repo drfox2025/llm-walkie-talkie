@@ -17,9 +17,9 @@
 ╚═════════════════════════════════════════════════════════════════════════════╝
 ```
 
-LLM Walkie-Talkie is a secure, light-weight, and highly token-efficient CLI tool **fully vibe coded** and specifically designed for the **Antigravity IDE Agent**. 
+LLM Walkie-Talkie is a **secure**, lightweight, and token-efficient CLI tool **fully vibe coded** and specifically designed for the **Antigravity IDE Agent** and terminal users. 
 
-It allows Antigravity and terminal users to pass entire codebases, multi-file contexts, images, and user conversation logs directly to high-performing external LLM providers (ZenMux, NVIDIA NIM, OpenRouter, Anthropic, OpenAI). By offloading 80%+ of the generation and surgical code modifications to these advanced external models, it dramatically minimizes the token costs of internal Antigravity models.
+It allows Antigravity to pass entire codebases, multi-file contexts, base64 multimodal attachments, and conversation logs securely to high-performing external LLM providers (ZenMux, NVIDIA NIM, OpenRouter, Anthropic, OpenAI) with **real-time streaming** and **automated surgical patching**. By offloading 80%+ of code generation and patching to these advanced external models, it dramatically minimizes the token costs of internal Antigravity models while keeping API keys isolated and protected.
 
 ---
 
@@ -30,25 +30,25 @@ It allows Antigravity and terminal users to pass entire codebases, multi-file co
    - It reads target source files, submits modification tasks to external models, receives replacement blocks, and patches the file on disk.
    - Employs a resilient regex parser to handle bracket fluctuations or minor format deviations from the model response.
 
-2. **Multimodal Base64 Image Support**:
+2. **Real-time Streaming (`--stream`)**:
+   - Supports real-time token delivery to terminal outputs. If `--json-output` is requested, it accumulates the stream and outputs a final, clean JSON response.
+
+3. **Multimodal Base64 Image Support**:
    - Natively detects image file attachments (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`).
    - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, Fable).
 
-3. **Agent Custom Skill Integration**:
+4. **Agent Custom Skill Integration**:
    - Includes a pre-configured `.agents/skills/ai-consult/SKILL.md` file.
    - Allows agents to discover and trigger the `ai-consult` workflow automatically, delegating code modifications and reducing native token usage.
 
-4. **Context-Aware Line-Aligned Truncation**:
+5. **Context-Aware Line-Aligned Truncation**:
    - Slices attachments to fit the selected model's context limit without breaking line boundaries or cutting code mid-line.
    - Logs detailed truncation metrics to `stderr`.
 
-5. **Token Saving via Strip Comments**:
+6. **Token Saving via Strip Comments**:
    - A robust, quote-safe lexical parser removes line and block comments (`#`, `//`, `/* */`) across Python, JS, TS, Rust, Go, SQL, HTML, and C-family languages while preserving string literals.
 
-6. **Real-time Streaming (`--stream`)**:
-   - Supports real-time token delivery to terminal outputs. If `--json-output` is requested, it accumulates the stream and outputs a final, clean JSON response.
-
-7. **Centralized Safe Configuration**:
+7. **Centralized & Secure Configuration**:
    - GUIDED interactive setup links to provider keys, masks inputs, checks structures, and enforces secure permissions (`0o600`).
    - Stores configuration globally in `~/.walkie/.env` to prevent credentials from being overwritten during package updates.
 
