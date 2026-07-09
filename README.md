@@ -32,7 +32,7 @@ It allows Antigravity and terminal users to pass entire codebases, multi-file co
 
 2. **Multimodal Base64 Image Support**:
    - Natively detects image file attachments (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`).
-   - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, Claude-4-Fable).
+   - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, Fable).
 
 3. **Agent Custom Skill Integration**:
    - Includes a pre-configured `.agents/skills/ai-consult/SKILL.md` file.
