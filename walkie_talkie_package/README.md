@@ -1,15 +1,17 @@
 # LLM Walkie-Talkie (IDE Agent Consultation CLI)
 
-```
-██╗     ██╗     ███╗   ███╗    ██╗    ██╗ █████╗ ██╗     ██╗  ██╗██╗███████╗    ████████╗ █████╗ ██╗     ██╗  ██╗██╗███████╗
-██║     ██║     ████╗ ████║    ██║    ██║██╔══██╗██║     ██║ ██╔╝██║██╔════╝    ╚══██╔══╝██╔══██╗██║     ██║ ██╔╝██║██╔════╝
-██║     ██║     ██╔████╔██║    ██║ █╗ ██║███████║██║     █████╔╝ ██║█████╗         ██║   ███████║██║     █████╔╝ ██║█████╗  
-██║     ██║     ██║╚██╔╝██║    ██║███╗██║██╔══██║██║     ██╔═██╗ ██║██╔══╝         ██║   ██╔══██║██║     ██╔═██╗ ██║██╔══╝  
-███████╗███████╗██║ ╚═╝ ██║    ╚███╔███╔╝██║  ██║███████╗██║  ██╗██║███████╗       ██║   ██║  ██║███████╗██║  ██╗██║███████╗
-╚══════╝╚══════╝╚═╝     ╚═╝     ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝       ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝
+```ansi
+[34m__      __  _ _   _         [31m_______    _ _   _ [0m
+[34m\ \    / / | | | (_)       [31m|__   __|  | | | (_)[0m
+[34m \ \  / /  | | |  _ ___       [31m| |     | | |  _ [0m
+[34m  \ \/ /   | | | | / _ \      [31m| |     | | | | |[0m
+[34m   \  /    | | | |  __/       [31m| |     | | | | |[0m
+[34m    \/     |_|_| |_|___|      [31m|_|     |_|_| |_|[0m
 ```
 
-LLM Walkie-Talkie is a secure, light-weight, and highly token-efficient CLI tool designed to integrate with agentic workflows (like the **Antigravity IDE Agent**). It allows agents and terminal users to consult external LLM providers (ZenMux, NVIDIA NIM, Groq, OpenRouter, Gemini, OpenAI, Anthropic) while attaching workspace context without hitting context limits or leaking credentials.
+LLM Walkie-Talkie is a secure, light-weight, and highly token-efficient CLI tool **fully vibe coded** and specifically designed for the **Antigravity IDE Agent**. 
+
+It allows Antigravity and terminal users to pass entire codebases, multi-file contexts, images, and user conversation logs directly to high-performing external LLM providers (ZenMux, NVIDIA NIM, OpenRouter, Anthropic, OpenAI). By offloading 80%+ of the generation and surgical code modifications to these advanced external models, it dramatically minimizes the token costs of internal Antigravity models.
 
 ---
 
@@ -17,12 +19,12 @@ LLM Walkie-Talkie is a secure, light-weight, and highly token-efficient CLI tool
 
 1. **Automated Surgical Patching (`walkie consult`)**: 
    - A built-in command that automates local refactoring.
-   - It reads a target file, submits modifications to the external model (e.g., GLM 5.2), receives replacement chunks, and patches the file on disk.
+   - It reads target source files, submits modification tasks to external models, receives replacement blocks, and patches the file on disk.
    - Employs a resilient regex parser to handle bracket fluctuations or minor format deviations from the model response.
 
 2. **Multimodal Base64 Image Support**:
    - Natively detects image file attachments (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`).
-   - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, GPT-4o).
+   - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, Claude-4-Fable).
 
 3. **Agent Custom Skill Integration**:
    - Includes a pre-configured `.agents/skills/ai-consult/SKILL.md` file.
@@ -50,7 +52,7 @@ You do not need paid subscriptions to start consulting high-performing models. W
 
 1. **ZenMux (GLM 5.2 / DeepSeek)**:
    - Visit [ZenMux](https://zenmux.ai) and sign up.
-   - Under the developer section, generate a free API key which allows calling advanced models like GLM and Claude-Fable.
+   - Under the developer section, generate a free API key which allows calling advanced models like GLM 5.2 and Claude-4-Fable.
    
 2. **NVIDIA NIM Gateway**:
    - Visit [NVIDIA Build](https://build.nvidia.com).
@@ -101,16 +103,16 @@ walkie ask --prompt "Explain the concept of quantum computing."
 
 ### Stream response, attach code, and strip comments to save tokens:
 ```bash
-walkie ask --model nvidia/deepseek-ai/deepseek-v4-pro --prompt "Audit this code" --attach walkie.py --strip-comments --stream
+walkie ask --model nvidia/anthropic/claude-opus-4.8 --prompt "Audit this code" --attach walkie.py --strip-comments --stream
 ```
 
 ### Automate surgical refactoring:
 ```bash
-walkie consult walkie.py --task "Add a docstring to the main entry point"
+walkie consult walkie.py --task "Add a docstring to the main entry point" --model nvidia/z-ai/glm-5.2
 ```
 
 ### Dry-run refactoring:
 Verify matching blocks and inspect compiled changes side-by-side without modifying files on disk:
 ```bash
-walkie consult main.py --task "Refactor login validation" --dry-run
+walkie consult main.py --task "Refactor login validation" --model zenmux/anthropic/claude-4-fable --dry-run
 ```
