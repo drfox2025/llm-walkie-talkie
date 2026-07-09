@@ -1,12 +1,12 @@
 # LLM Walkie-Talkie (IDE Agent Consultation CLI)
 
 ```
- _      _      _      __          __   _ _    _        _______        _ _    _      
-| |    | |    | |     \ \        / /  | | |  (_)      |__   __|      | | |  (_)     
-| |    | |    | |___   \ \  /\  / /_ _| | | ___  ________| | __ _  __| | | ___  ___ 
-| |    | |    | / __|   \ \/  \/ / _` | | |/ / |/ _ \___/| |/ _` |/ _` | |/ / |/ _ \
-| |____| |____| \__ \    \  /\  / (_| | |   <| |  __/    | | (_| | (_| |   <| |  __/
-|______|______|___/      \/  \/ \__,_|_|_|\_\_|\___|    |_|\__,_|\__,_|_|\_\_|\___|
+██╗     ██╗     ███╗   ███╗    ██╗    ██╗ █████╗ ██╗     ██╗  ██╗██╗███████╗    ████████╗ █████╗ ██╗     ██╗  ██╗██╗███████╗
+██║     ██║     ████╗ ████║    ██║    ██║██╔══██╗██║     ██║ ██╔╝██║██╔════╝    ╚══██╔══╝██╔══██╗██║     ██║ ██╔╝██║██╔════╝
+██║     ██║     ██╔████╔██║    ██║ █╗ ██║███████║██║     █████╔╝ ██║█████╗         ██║   ███████║██║     █████╔╝ ██║█████╗  
+██║     ██║     ██║╚██╔╝██║    ██║███╗██║██╔══██║██║     ██╔═██╗ ██║██╔══╝         ██║   ██╔══██║██║     ██╔═██╗ ██║██╔══╝  
+███████╗███████╗██║ ╚═╝ ██║    ╚███╔███╔╝██║  ██║███████╗██║  ██╗██║███████╗       ██║   ██║  ██║███████╗██║  ██╗██║███████╗
+╚══════╝╚══════╝╚═╝     ╚═╝     ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝       ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝
 ```
 
 LLM Walkie-Talkie is a secure, light-weight, and highly token-efficient CLI tool designed to integrate with agentic workflows (like the **Antigravity IDE Agent**). It allows agents and terminal users to consult external LLM providers (ZenMux, NVIDIA NIM, Groq, OpenRouter, Gemini, OpenAI, Anthropic) while attaching workspace context without hitting context limits or leaking credentials.
@@ -41,6 +41,27 @@ LLM Walkie-Talkie is a secure, light-weight, and highly token-efficient CLI tool
 7. **Centralized Safe Configuration**:
    - GUIDED interactive setup links to provider keys, masks inputs, checks structures, and enforces secure permissions (`0o600`).
    - Stores configuration globally in `~/.walkie/.env` to prevent credentials from being overwritten during package updates.
+
+---
+
+## 🔑 Fetching Free API Credentials
+
+You do not need paid subscriptions to start consulting high-performing models. We recommend looking for free API keys from the following providers:
+
+1. **ZenMux (GLM 5.2 / DeepSeek)**:
+   - Visit [ZenMux](https://zenmux.ai) and sign up.
+   - Under the developer section, generate a free API key which allows calling advanced models like GLM and Claude-Fable.
+   
+2. **NVIDIA NIM Gateway**:
+   - Visit [NVIDIA Build](https://build.nvidia.com).
+   - Sign up to receive free NIM integration credits. You can generate an API key (`nvapi-...`) to access high-speed NIM gateway models like `z-ai/glm-5.2` or `deepseek-ai/deepseek-v4-pro`.
+
+3. **OpenRouter (Free Tier Models)**:
+   - Visit [OpenRouter API Keys](https://openrouter.ai/keys) and create a key.
+   - You can query any OpenRouter model. Search for free models (those carrying the `:free` suffix) to run them at zero cost:
+     - `openrouter/tencent/hy3:free`
+     - `openrouter/google/gemini-2.5-flash:free`
+     - `openrouter/meta-llama/llama-3-8b-instruct:free`
 
 ---
 
