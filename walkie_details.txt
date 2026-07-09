@@ -1,0 +1,30 @@
+LLM WALKIE-TALKIE: ARCHITECTURAL & OPERATIONAL DETAILS
+
+1. OVERVIEW
+LLM Walkie-Talkie is designed to bridge local terminal execution environments and remote LLM gateways (such as LiteLLM). It solves three distinct problems for AI agents (like Antigravity) running inside restricted environments:
+- Key isolation and local-first configuration.
+- Prompt token reduction to save costs.
+- Safe integration with programmatic tools (STDERR vs STDOUT boundaries).
+
+2. CORE CODE STRUCTURE & ROUTING MECHANISM
+The main file, walkie.py, uses Click for CLI structure and LiteLLM for universal API calling.
+Key functions:
+- route_model(model): Intercepts provider prefixes (e.g. "nvidia/", "zenmux/") and maps them to their respective API bases and secret environment keys configured in the local .env.
+- _strip_comments(code, file_ext): Multi-language lexical comment parser. Removes line comments (#, //) and block comments (/* */) for Python, JS, TS, Rust, Go, and C-family languages, leaving string literals unaffected.
+- ask(...): Handles stdin reading, attachment processing, model routing, token truncation, stream handling, logging, and JSON serialization.
+
+3. CONTEXT-AWARE LINE-ALIGNED TRUNCATION
+To prevent 400 Bad Request errors due to context window limits, the script calculates character limits based on the model.
+If an attachment exceeds the limit:
+1. It executes a backward search (`rfind('\n', 0, max_chars)`) to locate the closest newline boundaries before the limit.
+2. It truncates the string cleanly at that index. This guarantees that code syntax is never cut mid-line (e.g., leaving dangling variables or partial keywords).
+3. It appends a [NOTICE] detailing exactly how many lines and characters were dropped to fit the limits.
+
+4. REAL-TIME STREAMING & PROGRAMMATIC JSON DUAL MODE
+- Regular/Streaming Mode: Streams response chunks directly to stdout. Utility logs ("Calling...", "Logged to...") are output strictly to stderr.
+- JSON mode: Enables clean UNIX pipelining. Standard outputs are suppressed, the stream is collected in memory, and the final response is printed to stdout as a single JSON object containing model info, usage, timestamps, and log file paths.
+
+5. SECURITY MEASURES
+- Masked inputs in setup via click.prompt(hide_input=True).
+- Key format validation checks via regex.
+- File protection: Restricts access to the local `.env` file via chmod 0600 on Unix systems so that only the owner can read/write keys.

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.tox/
+.venv/
+venv/
+ENV/
+env/
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+
+# Project Specific Logs & Temporary Files
+logs/
+*.zip
+scratch/
+test_*.py
+
+# OS Files
+.DS_Store
+Thumbs.db
