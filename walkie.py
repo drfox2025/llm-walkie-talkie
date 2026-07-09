@@ -46,6 +46,16 @@ else:
             except Exception as e:
                 click.secho(f"Warning: Failed to bootstrap .env: {str(e)}", fg="yellow", err=True)
 
+# Harden existing .env permissions if wider than 0o600 on non-Windows platforms
+if env_path.exists() and os.name != 'nt':
+    try:
+        current_mode = env_path.stat().st_mode & 0o777
+        if (current_mode & 0o077) != 0:
+            os.chmod(env_path, 0o600)
+            click.secho(f"Hardened permissions on {env_path} to 0o600", fg="yellow", err=True)
+    except Exception:
+        pass
+
 PROVIDERS = {
     "ZENMUX": {
         "env_var": "ZENMUX_API_KEY",
@@ -314,7 +324,35 @@ def _strip_comments(code: str, file_ext: str) -> str:
         elif len(non_empty_lines) > 0 and non_empty_lines[-1] != "":
             non_empty_lines.append("")
     return "\n".join(non_empty_lines).strip()
+_KEY_PATTERNS = [
+    re.compile(r"sk-ai-v1-[a-zA-Z0-9_-]{10,}"),
+    re.compile(r"nvapi-[a-zA-Z0-9_-]{10,}"),
+    re.compile(r"gsk_[a-zA-Z0-9_-]{10,}"),
+    re.compile(r"sk-or-[a-zA-Z0-9_-]{10,}"),
+    re.compile(r"sk-ant-[a-zA-Z0-9_-]{10,}"),
+    re.compile(r"AIzaSy[a-zA-Z0-9_-]{20,}"),
+    re.compile(r"sk-[a-zA-Z0-9_-]{20,}"),
+]
 
+def safe_error_handler(e: Exception) -> str:
+    """Regex-scrub API keys from errors to prevent accidental credential leakage in logs or console."""
+    msg = str(e)
+    for pat in _KEY_PATTERNS:
+        msg = pat.sub("[REDACTED_KEY]", msg)
+    return msg
+
+def sanitize_path(user_path: str, root: Optional[Path] = None) -> Path:
+    """Verify paths reside inside workspace to block path traversal attempts."""
+    if os.environ.get("WALKIE_ALLOW_ABSOLUTE") == "1":
+        return Path(user_path).expanduser().resolve()
+    root = (root or Path.cwd()).resolve()
+    resolved = Path(user_path).expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        click.secho(f"Security Error: path outside workspace blocked: {user_path}", fg="red", err=True)
+        sys.exit(1)
+    return resolved
 def safe_print(text: str, fg: Optional[str] = None, nl: bool = True, err: bool = False):
     """Safely print text to stdout/stderr replacing characters not supported by the console encoding."""
     stream = sys.stderr if err else sys.stdout
@@ -377,7 +415,8 @@ def build_prompt(
 
     full_prompt = prompt
     if prompt_file:
-        with open(prompt_file, 'r', encoding='utf-8') as f:
+        s_prompt_file = sanitize_path(prompt_file)
+        with open(s_prompt_file, 'r', encoding='utf-8') as f:
             file_content = f.read()
             if full_prompt:
                 full_prompt += "\n\n" + file_content
@@ -394,7 +433,7 @@ def build_prompt(
     if attach:
         attachment_blocks = []
         for file_path in attach:
-            path_obj = Path(file_path)
+            path_obj = sanitize_path(file_path)
             # Detect images
             if path_obj.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
                 try:
@@ -576,7 +615,10 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
         usage_data = {}
 
         if not stream:
-            response = litellm.completion(**kwargs)
+            try:
+                response = litellm.completion(**kwargs)
+            except Exception as le:
+                raise RuntimeError(safe_error_handler(le)) from None
             reply = response.choices[0].message.content
 
             if hasattr(response, 'usage') and response.usage:
@@ -590,7 +632,10 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
                     except Exception:
                         usage_data = {k: str(v) for k, v in vars(response.usage).items()} if hasattr(response.usage, '__dict__') else str(response.usage)
         else:
-            response_stream = litellm.completion(**kwargs, stream=True)
+            try:
+                response_stream = litellm.completion(**kwargs, stream=True)
+            except Exception as le:
+                raise RuntimeError(safe_error_handler(le)) from None
             click.secho(f"Streaming {model}...", fg="yellow", err=True)
 
             if not json_output and sys.stdout.isatty():
@@ -658,6 +703,68 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
         click.secho(f"API Error: {str(e)}", fg="red", err=True)
         sys.exit(1)
 
+def call_llm(model: str, messages: List[dict], **opts) -> Tuple[str, dict]:
+    """Single entry for litellm.completion. Returns (reply, usage_dict)."""
+    routed, api_base, api_key = route_model(model)
+    kwargs = {"model": routed, "messages": messages, "timeout": opts.get("timeout", 45)}
+    if api_base: kwargs["api_base"] = api_base
+    if api_key: kwargs["api_key"] = api_key
+    for k in ("max_tokens", "temperature", "top_p", "stream", "extra_body"):
+        if opts.get(k) is not None:
+            kwargs[k] = opts[k]
+    try:
+        resp = litellm.completion(**kwargs)
+        reply = resp.choices[0].message.content or ""
+        usage_data = {}
+        if hasattr(resp, 'usage') and resp.usage:
+            if hasattr(resp.usage, 'model_dump'):
+                usage_data = resp.usage.model_dump()
+            elif hasattr(resp.usage, 'dict'):
+                usage_data = resp.usage.dict()
+            else:
+                try:
+                    usage_data = dict(resp.usage)
+                except Exception:
+                    pass
+        return reply, usage_data
+    except Exception as e:
+        raise RuntimeError(safe_error_handler(e)) from None
+
+def extract_patches(reply: str) -> List[Tuple[str, str]]:
+    """Extract REPLACEMENT_START / WITH / END blocks from text."""
+    pattern = r"(?:<|=|\s)*REPLACEMENT_START(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_WITH(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_END(?:>|=|\s)*"
+    return re.findall(pattern, reply, re.DOTALL)
+
+def _normalize_block(block: str) -> str:
+    return "\n".join(line.strip().replace("\t", " ") for line in block.splitlines() if line.strip())
+
+def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bool = True) -> Tuple[str, Optional[str]]:
+    """Apply replacement patches to content with normalized indentation fallback matching."""
+    working = content
+    for orig, rep in patches:
+        if orig in working:
+            working = working.replace(orig, rep, 1)
+            continue
+        if normalize:
+            orig_lines = [line.strip().replace("\t", " ") for line in orig.splitlines() if line.strip()]
+            working_lines = working.splitlines()
+            matched_start = -1
+            
+            for idx in range(len(working_lines) - len(orig_lines) + 1):
+                window = [working_lines[idx+i].strip().replace("\t", " ") for i in range(len(orig_lines))]
+                if window == orig_lines:
+                    matched_start = idx
+                    break
+            
+            if matched_start != -1:
+                candidate_lines = working_lines[matched_start : matched_start + len(orig_lines)]
+                candidate = "\n".join(candidate_lines)
+                if candidate in working:
+                    working = working.replace(candidate, rep, 1)
+                    continue
+        return working, f"Original block not found:\n```\n{orig}\n```"
+    return working, None
+
 @cli.command()
 @click.argument('file', type=click.Path(exists=True))
 @click.option('--task', '-t', required=True, help="Description of the task/changes required.")
@@ -669,20 +776,23 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
 @click.option('--retries', '-r', type=int, default=3, help="Number of automatic self-correction retries if patching fails.")
 @click.option('--line-range', '-L', help="Line range in format start-end (e.g. 100-150) to target, saving tokens by omitting the rest of the file context.")
 @click.option('--verify-model', '-V', help="Secondary model name to use as an independent code auditor to cross-check patches for hallucinations.")
-def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model):
+@click.option('--chain-model', '-c', multiple=True, help="Sequential models after the primary model to refine changes.")
+@click.option('--keep-comments', is_flag=True, help="Disable comment stripping (comments are stripped by default).")
+def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments):
     """Automate surgical patching of files with a self-correcting model feedback harness."""
+    # Sanitize inputs to prevent path traversal
+    s_file = sanitize_path(file)
     try:
-        with open(file, 'r', encoding='utf-8') as f:
+        with open(s_file, 'r', encoding='utf-8') as f:
             file_content = f.read()
     except Exception as e:
         click.secho(f"Error reading target file {file}: {str(e)}", fg="red", err=True)
         sys.exit(1)
 
-    # Line Range Parsing & Chunk Extraction
+    lines = file_content.splitlines()
     start_line = None
     end_line = None
     targeted_content = file_content
-    lines = file_content.splitlines()
 
     if line_range:
         try:
@@ -691,11 +801,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             end_line = int(end_str.strip())
             if start_line < 1 or end_line < start_line:
                 raise ValueError("Line numbers must be positive and start_line <= end_line.")
-            
-            # Clamp end_line to the file length
             end_line = min(end_line, len(lines))
-            
-            # Extract range with 5 context lines before and after
             start_idx = max(0, start_line - 1 - 5)
             end_idx = min(len(lines), end_line + 5)
             targeted_content = "\n".join(lines[start_idx:end_idx])
@@ -718,281 +824,222 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
     )
     if line_range:
         system_prompt += (
-            f"\n\nCRITICAL: You are viewing a localized segment (lines {start_line}-{end_line}) of the larger file '{Path(file).name}'. "
+            f"\n\nCRITICAL: You are viewing a localized segment (lines {start_line}-{end_line}) of the larger file '{Path(s_file).name}'. "
             "Do not add new imports or redeclare classes/functions that are defined globally. Focus ONLY on modifying this segment in place. "
             "Assume all global imports and variables are already available."
         )
 
-    full_prompt = (
-        f"Task: {task}\n\n"
-        f"Target File: {file}\n"
-    )
+    base_user_prompt = f"Task: {task}\n\nTarget File: {s_file}\n"
     if line_range:
-        full_prompt += f"Target Line Range: {start_line}-{end_line}\n"
-    full_prompt += (
-        "```\n"
-        f"{targeted_content}\n"
-        "```\n"
-    )
+        base_user_prompt += f"Target Line Range: {start_line}-{end_line}\n"
+    base_user_prompt += f"```\n{targeted_content}\n```\n"
 
     if attach:
         attachment_blocks = []
         for file_path in attach:
+            s_attach_file = sanitize_path(file_path)
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(s_attach_file, 'r', encoding='utf-8', errors='ignore') as f:
                     attach_content = f.read()
+                if not keep_comments:
+                    attach_content = _strip_comments(attach_content, s_attach_file.suffix)
                 attachment_blocks.append(
-                    f"\n---\nAttached File: {Path(file_path).name}\n```\n{attach_content}\n```"
+                    f"\n---\nAttached File: {s_attach_file.name}\n```\n{attach_content}\n```"
                 )
             except Exception as e:
                 click.secho(f"Warning: Could not read attachment {file_path}: {str(e)}", fg="yellow", err=True)
         if attachment_blocks:
-            full_prompt += "\n\n### Attached Files Context:\n" + "\n".join(attachment_blocks)
+            base_user_prompt += "\n\n### Attached Files Context:\n" + "\n".join(attachment_blocks)
 
-    routed_model, api_base, api_key = route_model(model)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": full_prompt}
-    ]
+    models_chain = [model] + list(chain_model)
+    working_content = file_content
+    prior_diffs = []
+    final_patches = []
+    usage_by_model = {}
 
-    attempt = 0
-    modified_content = file_content
-    total_replacements = 0
+    for step_idx, chain_m in enumerate(models_chain):
+        is_final = (step_idx == len(models_chain) - 1)
+        if step_idx > 0:
+            click.secho(f"Chaining to next model ({chain_m})...", fg="yellow", err=True)
 
-    while attempt <= retries:
-        if attempt > 0:
-            click.secho(f"Retrying consultation (Attempt {attempt}/{retries})...", fg="yellow", err=True)
-
-        click.secho(f"Consulting {model}...", fg="yellow", err=True)
-        kwargs = {"model": routed_model, "messages": messages}
-        if api_base:
-            kwargs["api_base"] = api_base
-        if api_key:
-            kwargs["api_key"] = api_key
-
-        try:
-            response = litellm.completion(**kwargs)
-            reply = response.choices[0].message.content
-
-            usage_data = {}
-            if hasattr(response, 'usage') and response.usage:
-                if hasattr(response.usage, 'model_dump'):
-                    usage_data = response.usage.model_dump()
-                elif hasattr(response.usage, 'dict'):
-                    usage_data = response.usage.dict()
-
-            json_path, md_path = log_interaction(
-                model=model,
-                routed_model=routed_model,
-                system=system_prompt,
-                full_prompt=messages[-1]["content"],
-                reply=reply,
-                usage_data=usage_data,
-                no_log=no_log
-            )
-
-            if not no_log:
-                click.secho(f"Logged to {json_path} and {md_path}", fg="cyan", err=True)
-
-        except Exception as e:
-            click.secho(f"API Error: {str(e)}", fg="red", err=True)
-            sys.exit(1)
-
-        pattern = r"(?:<|=|\s)*REPLACEMENT_START(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_WITH(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_END(?:>|=|\s)*"
-        matches = re.findall(pattern, reply, re.DOTALL)
-
-        error_feedback = None
-
-        if not matches:
-            error_feedback = (
-                "Error: No valid replacement blocks found in the model response. Expected format:\n"
-                "<<<< REPLACEMENT_START >>>>\n"
-                "[exact original code blocks to match]\n"
-                "==== REPLACEMENT_WITH ====\n"
-                "[new replacement code blocks]\n"
-                "<<<< REPLACEMENT_END >>>>"
-            )
-        else:
+        user_prompt = base_user_prompt
+        # For chained steps, use working content and attach compact diffs of prior steps
+        if step_idx > 0:
+            current_segment = working_content
             if line_range:
-                # Target range mapping
+                w_lines = working_content.splitlines()
                 start_idx = max(0, start_line - 1 - 5)
-                end_idx = min(len(lines), end_line + 5)
-                segment_content = "\n".join(lines[start_idx:end_idx])
-                
-                for original_block, new_block in matches:
-                    if original_block not in segment_content:
-                        error_feedback = (
-                            f"Error: The following original block was not found in targeted line range segment ({start_line}-{end_line}):\n"
-                            f"```\n{original_block}\n```\n"
-                            f"Please ensure you only target and replace code lines strictly within this line range."
-                        )
-                        break
-                    segment_content = segment_content.replace(original_block, new_block, 1)
-                    total_replacements += 1
-                
-                if not error_feedback:
-                    # Reconstruct complete modified content
-                    header = "\n".join(lines[:start_idx])
-                    footer = "\n".join(lines[end_idx:])
-                    modified_content = ""
-                    if header:
-                        modified_content += header + "\n"
-                    modified_content += segment_content
-                    if footer:
-                        modified_content += "\n" + footer
-            else:
-                # Global file content mapping
-                modified_content = file_content
-                for original_block, new_block in matches:
-                    if original_block not in modified_content:
-                        error_feedback = (
-                            f"Error: The following original block was not found in the file:\n"
-                            f"```\n{original_block}\n```\n"
-                            f"Please ensure you match the original source code lines exactly, "
-                            f"including all indentation, spaces, and formatting."
-                        )
-                        break
-                    modified_content = modified_content.replace(original_block, new_block, 1)
-                    total_replacements += 1
-
-            if not error_feedback:
-                # Syntax Check based on file extension
-                file_ext = Path(file).suffix.lower()
-                if file_ext == '.py':
-                    try:
-                        compile(modified_content, file, 'exec')
-                    except SyntaxError as se:
-                        error_feedback = (
-                            f"Syntax Error check failed for Python file:\n"
-                            f"{str(se)}\n"
-                            f"The proposed code changes introduced this syntax issue. Please correct the syntax."
-                        )
-
-            # Hallucination Cross-Checking Auditor Call
-            if not error_feedback and verify_model:
-                click.secho(f"Cross-checking patch with auditor model {verify_model} to prevent hallucinations...", fg="yellow", err=True)
-                
-                routed_verify_model, v_api_base, v_api_key = route_model(verify_model)
-                
-                verify_system = (
-                    "You are an independent, strict code auditor. Your job is to review a proposed surgical patch for correctness "
-                    "and to check for hallucinations (such as references to undefined variables, functions, packages, or incorrect logic).\n"
-                )
-                if line_range:
-                    verify_system += (
-                        f"NOTE: The patch targets a localized segment (lines {start_line}-{end_line}) of the file '{Path(file).name}'. "
-                        "Ignore missing global imports or global definitions; focus only on local scope violations, syntax correctness, "
-                        "and logic errors within the provided changes."
-                    )
-                
-                verify_prompt = (
-                    f"Task context: {task}\n"
-                    f"Target file: {Path(file).name}\n\n"
-                    "Please review the proposed change blocks below:\n"
-                )
-                for idx, (orig, rep) in enumerate(matches, 1):
-                    verify_prompt += (
-                        f"--- Change Block #{idx} ---\n"
-                        f"Original Code:\n```\n{orig}\n```\n"
-                        f"Proposed Replacement:\n```\n{rep}\n```\n"
-                    )
-                verify_prompt += (
-                    "\nCheck for:\n"
-                    "1. Code Hallucinations: Undefined variables/functions, wrong imports, or non-existent library dependencies.\n"
-                    "2. Indentation/Scope issues.\n\n"
-                    "Does this patch pass review? Respond strictly in JSON format matching this schema:\n"
-                    "{\n"
-                    '  "verdict": "PASS" or "FAIL",\n'
-                    '  "reason": "Detailed description of issues if FAIL, or empty string if PASS"\n'
-                    "}\n"
-                    "Do not include any conversational text or explanation outside of this JSON block."
-                )
-                
-                verify_messages = [
-                    {"role": "system", "content": verify_system},
-                    {"role": "user", "content": verify_prompt}
-                ]
-                
-                v_kwargs = {"model": routed_verify_model, "messages": verify_messages, "max_tokens": 150}
-                if v_api_base:
-                    v_kwargs["api_base"] = v_api_base
-                if v_api_key:
-                    v_kwargs["api_key"] = v_api_key
-                
-                try:
-                    v_response = litellm.completion(**v_kwargs)
-                    reply_verify = v_response.choices[0].message.content.strip()
-                    
-                    try:
-                        # Extract JSON block in case the model wraps it in markdown code fences
-                        json_content = reply_verify
-                        if "```json" in json_content:
-                            json_content = json_content.split("```json", 1)[1].split("```", 1)[0]
-                        elif "```" in json_content:
-                            json_content = json_content.split("```", 1)[1].split("```", 1)[0]
-                        json_content = json_content.strip()
-                        
-                        import json as json_lib
-                        verify_data = json_lib.loads(json_content)
-                        verdict = verify_data.get("verdict", "").strip().upper()
-                        reason = verify_data.get("reason", "").strip()
-                        
-                        if verdict == "FAIL":
-                            error_feedback = f"Auditor Review Failed (Hallucination/Logic Check): {reason}"
-                            click.secho(f"Auditor flagged failure: {reason}", fg="red", err=True)
-                        elif verdict == "PASS":
-                            click.secho("Auditor verification passed successfully!", fg="green", err=True)
-                        else:
-                            raise ValueError(f"Invalid verdict '{verdict}'")
-                    except Exception as je:
-                        # Fallback text parsing
-                        click.secho(f"Warning: JSON parsing failed for auditor response: {str(je)}. Falling back to text parsing.", fg="yellow", err=True)
-                        verdict_match = re.search(r"\[VERDICT\]\s*(PASS|FAIL)(?::?\s*(.*))?", reply_verify, re.IGNORECASE)
-                        if verdict_match:
-                            status = verdict_match.group(1).upper()
-                            reason = verdict_match.group(2) or "Auditor review failed."
-                            if status == "FAIL":
-                                error_feedback = f"Auditor Review Failed (Hallucination/Logic Check): {reason}"
-                                click.secho(f"Auditor flagged failure: {reason}", fg="red", err=True)
-                            else:
-                                click.secho("Auditor verification passed successfully!", fg="green", err=True)
-                        else:
-                            if "fail" in reply_verify.lower() or "error" in reply_verify.lower():
-                                error_feedback = f"Auditor Review Failed: {reply_verify}"
-                                click.secho(f"Auditor flagged failure: {reply_verify}", fg="red", err=True)
-                            else:
-                                click.secho("Auditor verification passed (implicit success)!", fg="green", err=True)
-                except Exception as ve:
-                    click.secho(f"Warning: Verification call to {verify_model} failed: {str(ve)}. Proceeding anyway.", fg="yellow", err=True)
-
-        if not error_feedback:
-            # Success!
-            break
-        else:
-            click.secho(f"Patch validation failed: {error_feedback}", fg="red", err=True)
-            if attempt == retries:
-                click.secho("Error: Self-correction limit reached. Unable to generate a valid patch.", fg="red", err=True)
-                sys.exit(1)
+                end_idx = min(len(w_lines), end_line + 5)
+                current_segment = "\n".join(w_lines[start_idx:end_idx])
             
-            # Feed the error back to the model for self-correction
-            messages.append({"role": "assistant", "content": reply})
-            messages.append({
-                "role": "user",
-                "content": f"The patch application failed with the following error:\n{error_feedback}\n\nPlease analyze the code and generate a corrected patch block."
-            })
-            attempt += 1
+            user_prompt = f"Task: {task}\n\nTarget File (Current state after prior chain steps):\n"
+            if line_range:
+                user_prompt += f"Target Line Range: {start_line}-{end_line}\n"
+            user_prompt += f"```\n{current_segment}\n```\n"
+            if prior_diffs:
+                user_prompt += "\n### Diffs applied by earlier models in this chain:\n" + "\n".join(prior_diffs)
 
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        attempt = 0
+        while attempt <= retries:
+            if attempt > 0:
+                click.secho(f"Retrying chain step {chain_m} (Attempt {attempt}/{retries})...", fg="yellow", err=True)
+            else:
+                click.secho(f"Consulting model: {chain_m}...", fg="yellow", err=True)
+
+            try:
+                reply, usage = call_llm(chain_m, messages)
+                usage_by_model[f"{chain_m}#step{step_idx}_attempt{attempt}"] = usage
+                
+                # Log the interaction
+                json_path, md_path = log_interaction(
+                    model=chain_m,
+                    routed_model=route_model(chain_m)[0],
+                    system=system_prompt,
+                    full_prompt=user_prompt,
+                    reply=reply,
+                    usage_data=usage,
+                    no_log=no_log
+                )
+                if not no_log:
+                    click.secho(f"Logged to {json_path} and {md_path}", fg="cyan", err=True)
+
+            except Exception as e:
+                click.secho(f"Error during LLM call: {safe_error_handler(e)}", fg="red", err=True)
+                sys.exit(1)
+
+            patches = extract_patches(reply)
+            error_feedback = None
+
+            if not patches:
+                error_feedback = (
+                    "Error: No valid replacement blocks found. Expected format:\n"
+                    "<<<< REPLACEMENT_START >>>>\n"
+                    "[exact original code blocks to match]\n"
+                    "==== REPLACEMENT_WITH ====\n"
+                    "[new replacement code blocks]\n"
+                    "<<<< REPLACEMENT_END >>>>"
+                )
+            else:
+                # If we are in line range, only apply inside slice
+                if line_range:
+                    w_lines = working_content.splitlines()
+                    start_idx = max(0, start_line - 1 - 5)
+                    end_idx = min(len(w_lines), end_line + 5)
+                    segment_content = "\n".join(w_lines[start_idx:end_idx])
+                    
+                    candidate_segment, err = apply_patches(segment_content, patches)
+                    if err:
+                        error_feedback = err
+                    else:
+                        header = "\n".join(w_lines[:start_idx])
+                        footer = "\n".join(w_lines[end_idx:])
+                        candidate_content = ""
+                        if header:
+                            candidate_content += header + "\n"
+                        candidate_content += candidate_segment
+                        if footer:
+                            candidate_content += "\n" + footer
+                else:
+                    candidate_content, err = apply_patches(working_content, patches)
+                    if err:
+                        error_feedback = err
+
+            if error_feedback:
+                click.secho(f"Patch verification failed on attempt: {error_feedback}", fg="red", err=True)
+                if attempt < retries:
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({
+                        "role": "user",
+                        "content": f"The patch application failed with the following error:\n{error_feedback}\n\nPlease analyze the code and generate a corrected patch block."
+                    })
+                    attempt += 1
+                    continue
+                else:
+                    click.secho("Error: Self-correction limit reached. Unable to generate a valid patch.", fg="red", err=True)
+                    sys.exit(1)
+
+            # Success at this step
+            if not is_final:
+                working_content = candidate_content
+                # Save compact diff log for the next model
+                for o, n in patches:
+                    prior_diffs.append(f"--- Original Block ---\n{o[:400]}\n=== Replaced With ===\n{n[:400]}")
+            else:
+                final_patches = patches
+                working_content = candidate_content
+            break
+
+    # Final Syntax and Auditor validations
+    error_feedback = None
+    file_ext = Path(s_file).suffix.lower()
+    if file_ext == '.py':
+        try:
+            compile(working_content, s_file, 'exec')
+        except SyntaxError as se:
+            error_feedback = f"Syntax Error check failed for Python file:\n{str(se)}"
+
+    if not error_feedback and verify_model:
+        click.secho(f"Cross-checking final patches with auditor model {verify_model}...", fg="yellow", err=True)
+        verify_system = "You are an independent, strict code auditor. Review patches for correctness and hallucinations.\n"
+        if line_range:
+            verify_system += f"NOTE: Patch targets localized lines {start_line}-{end_line} of {Path(s_file).name}.\n"
+        
+        verify_prompt = f"Task: {task}\nTarget: {Path(s_file).name}\nProposed Changes:\n"
+        for idx, (orig, rep) in enumerate(final_patches, 1):
+            verify_prompt += f"Block #{idx}:\nOriginal:\n```\n{orig}\n```\nReplacement:\n```\n{rep}\n```\n"
+        verify_prompt += (
+            "\nRespond strictly in JSON format matching this schema:\n"
+            "{\n  \"verdict\": \"PASS\" or \"FAIL\",\n  \"reason\": \"Description of issues if FAIL, or empty string if PASS\"\n}\n"
+        )
+        
+        try:
+            reply_verify, v_usage = call_llm(verify_model, [
+                {"role": "system", "content": verify_system},
+                {"role": "user", "content": verify_prompt}
+            ], max_tokens=150)
+            usage_by_model[f"{verify_model}#verify"] = v_usage
+            
+            # JSON Parse verification
+            json_content = reply_verify
+            if "```json" in json_content:
+                json_content = json_content.split("```json", 1)[1].split("```", 1)[0]
+            elif "```" in json_content:
+                json_content = json_content.split("```", 1)[1].split("```", 1)[0]
+            
+            import json as json_lib
+            verify_data = json_lib.loads(json_content.strip())
+            verdict = verify_data.get("verdict", "").strip().upper()
+            reason = verify_data.get("reason", "").strip()
+            
+            if verdict == "FAIL":
+                error_feedback = f"Auditor Review Failed (Hallucination Check): {reason}"
+                click.secho(f"Auditor flagged failure: {reason}", fg="red", err=True)
+            elif verdict == "PASS":
+                click.secho("Auditor verification passed successfully!", fg="green", err=True)
+        except Exception as ve:
+            click.secho(f"Warning: Verification call to {verify_model} failed: {str(ve)}. Proceeding anyway.", fg="yellow", err=True)
+
+    if error_feedback:
+        click.secho(f"Validation loop flagged critical failure: {error_feedback}", fg="red", err=True)
+        sys.exit(1)
+
+    total_replacements = len(final_patches)
     if dry_run:
         click.secho("--- Dry Run Results ---", fg="cyan", bold=True)
         click.secho("Changes were successfully matched and parsed but not saved to disk.", fg="yellow")
         click.secho(f"Total patches applied: {total_replacements}", fg="cyan")
         click.echo("\n" + "="*40 + " Proposed File Content " + "="*40 + "\n")
-        safe_print(modified_content)
+        safe_print(working_content)
         click.echo("\n" + "="*40 + " End of Proposed Content " + "="*40)
     else:
         try:
-            with open(file, 'w', encoding='utf-8') as f:
-                f.write(modified_content)
+            with open(s_file, 'w', encoding='utf-8') as f:
+                f.write(working_content)
             click.secho(f"Success! Applied {total_replacements} patch(es) to {file}.", fg="green")
         except Exception as e:
             click.secho(f"Error saving file {file}: {str(e)}", fg="red", err=True)
@@ -1003,6 +1050,8 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
 def map(output, exclude):
     """Generate a highly compressed, token-efficient YAML map of the codebase for LLMs."""
     import fnmatch
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
     excludes = list(exclude) if exclude else [
         ".git", "__pycache__", "node_modules", "build", "dist", 
         ".walkie", "walkie_talkie.zip", "logs", "*.egg-info", "*.pyc"
@@ -1018,14 +1067,12 @@ def map(output, exclude):
         "mermaid_dependencies": ""
     }
     
-    modules_list = []
-    imports_map = {}
+    files_to_parse = []
+    config_files = []
     
     click.secho("Scanning workspace...", fg="yellow", err=True)
     
     for dirpath, dirnames, filenames in os.walk(root_path):
-        rel_dir = Path(dirpath).relative_to(root_path)
-        
         # Filter directories in place
         dirnames[:] = [d for d in dirnames if not any(fnmatch.fnmatch(d, pat) for pat in excludes)]
         
@@ -1040,60 +1087,65 @@ def map(output, exclude):
             project_map["directory_structure"].append(rel_str)
             
             if filename.endswith(".py"):
-                module_name = filepath.stem
-                modules_list.append(module_name)
-                
-                try:
-                    # Skip parsing files larger than 1MB to prevent OOM
-                    if filepath.stat().st_size > 1_000_000:
-                        raise ValueError("File size exceeds 1MB limit")
-                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                        code = f.read()
-                    
-                    import ast as ast_lib
-                    tree = ast_lib.parse(code)
-                    module_info = {
-                        "classes": [],
-                        "functions": [],
-                        "imports": []
-                    }
-                    
-                    for node in ast_lib.walk(tree):
-                        if isinstance(node, ast_lib.ClassDef):
-                            methods = [n.name for n in node.body if isinstance(n, ast_lib.FunctionDef)]
-                            module_info["classes"].append({
-                                "name": node.name,
-                                "methods": methods
-                            })
-                    
-                    for child in tree.body:
-                        if isinstance(child, ast_lib.FunctionDef):
-                            module_info["functions"].append(child.name)
-                        elif isinstance(child, ast_lib.Import):
-                            for name in child.names:
-                                module_info["imports"].append(name.name)
-                        elif isinstance(child, ast_lib.ImportFrom):
-                            if child.module:
-                                module_info["imports"].append(child.module)
-                    
-                    imports_map[module_name] = module_info["imports"]
-                    project_map["python_modules"][rel_str] = {
-                        "classes": module_info["classes"],
-                        "functions": module_info["functions"]
-                    }
-                except Exception as e:
-                    project_map["python_modules"][rel_str] = {
-                        "error": f"Failed to parse AST: {str(e)}"
-                    }
-            
+                files_to_parse.append((filepath, rel_str))
             elif filename in ("requirements.txt", "pyproject.toml"):
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    project_map["config_files"][filename] = content.splitlines()[:15]
-                except Exception:
-                    pass
+                config_files.append((filepath, filename))
+
+    def parse_python_file(filepath, rel_str):
+        try:
+            if filepath.stat().st_size > 1_000_000:
+                return rel_str, {"error": "File size exceeds 1MB limit"}, []
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                code = f.read()
+            import ast as ast_lib
+            tree = ast_lib.parse(code)
+            module_info = {
+                "classes": [],
+                "functions": [],
+                "imports": []
+            }
+            for node in ast_lib.walk(tree):
+                if isinstance(node, ast_lib.ClassDef):
+                    methods = [n.name for n in node.body if isinstance(n, ast_lib.FunctionDef)]
+                    module_info["classes"].append({
+                        "name": node.name,
+                        "methods": methods
+                    })
+            for child in tree.body:
+                if isinstance(child, ast_lib.FunctionDef):
+                    module_info["functions"].append(child.name)
+                elif isinstance(child, ast_lib.Import):
+                    for name in child.names:
+                        module_info["imports"].append(name.name)
+                elif isinstance(child, ast_lib.ImportFrom):
+                    if child.module:
+                        module_info["imports"].append(child.module)
+            return rel_str, {
+                "classes": module_info["classes"],
+                "functions": module_info["functions"]
+            }, module_info["imports"]
+        except Exception as e:
+            return rel_str, {"error": f"Failed to parse AST: {str(e)}"}, []
+
+    modules_list = [Path(fp).stem for fp, _ in files_to_parse]
+    imports_map = {}
     
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(parse_python_file, fp, r_str): (fp, r_str) for fp, r_str in files_to_parse}
+        for future in as_completed(futures):
+            r_str, info, imports = future.result()
+            project_map["python_modules"][r_str] = info
+            stem = Path(futures[future][0]).stem
+            imports_map[stem] = imports
+
+    for filepath, filename in config_files:
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            project_map["config_files"][filename] = content.splitlines()[:15]
+        except Exception:
+            pass
+
     # Build Mermaid dependency flow
     mermaid_lines = ["graph TD"]
     has_edges = False
