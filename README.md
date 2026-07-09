@@ -60,7 +60,7 @@ You do not need paid subscriptions to start consulting high-performing models. W
 
 1. **ZenMux (GLM 5.2 / DeepSeek)**:
    - Visit [ZenMux](https://zenmux.ai) and sign up.
-   - Under the developer section, generate a free API key which allows calling advanced models like GLM 5.2 and Claude-4-Fable.
+   - Under the developer section, generate a free API key which allows calling advanced models like GLM 5.2 and Fable.
    
 2. **NVIDIA NIM Gateway**:
    - Visit [NVIDIA Build](https://build.nvidia.com).
