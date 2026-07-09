@@ -648,8 +648,9 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
 @click.option('--attach', '-a', multiple=True, type=click.Path(exists=True), help="Optional multiple attached files.")
 @click.option('--dry-run', is_flag=True, help="Compile changes and show them without saving to disk.")
 @click.option('--no-log', is_flag=True, help="Disable interaction logging.")
-def consult(file, task, model, system, attach, dry_run, no_log):
-    """Automate surgical patching of files by external LLMs."""
+@click.option('--retries', '-r', type=int, default=3, help="Number of automatic self-correction retries if patching fails.")
+def consult(file, task, model, system, attach, dry_run, no_log, retries):
+    """Automate surgical patching of files with a self-correcting model feedback harness."""
     try:
         with open(file, 'r', encoding='utf-8') as f:
             file_content = f.read()
@@ -698,58 +699,107 @@ def consult(file, task, model, system, attach, dry_run, no_log):
         {"role": "user", "content": full_prompt}
     ]
 
-    click.secho(f"Consulting {model}...", fg="yellow", err=True)
-    kwargs = {"model": routed_model, "messages": messages}
-    if api_base:
-        kwargs["api_base"] = api_base
-    if api_key:
-        kwargs["api_key"] = api_key
-
-    try:
-        response = litellm.completion(**kwargs)
-        reply = response.choices[0].message.content
-
-        usage_data = {}
-        if hasattr(response, 'usage') and response.usage:
-            if hasattr(response.usage, 'model_dump'):
-                usage_data = response.usage.model_dump()
-            elif hasattr(response.usage, 'dict'):
-                usage_data = response.usage.dict()
-
-        json_path, md_path = log_interaction(
-            model=model,
-            routed_model=routed_model,
-            system=system_prompt,
-            full_prompt=full_prompt,
-            reply=reply,
-            usage_data=usage_data,
-            no_log=no_log
-        )
-
-        if not no_log:
-            click.secho(f"Logged to {json_path} and {md_path}", fg="cyan", err=True)
-
-    except Exception as e:
-        click.secho(f"API Error: {str(e)}", fg="red", err=True)
-        sys.exit(1)
-
-    pattern = r"(?:<|=|\s)*REPLACEMENT_START(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_WITH(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_END(?:>|=|\s)*"
-    matches = re.findall(pattern, reply, re.DOTALL)
-
-    if not matches:
-        click.secho("Error: No valid replacement blocks found in the model response. Expected format:\n<<<< REPLACEMENT_START >>>>\n[exact original code blocks to match]\n==== REPLACEMENT_WITH ====\n[new replacement code blocks]\n<<<< REPLACEMENT_END >>>>", fg="red", err=True)
-        sys.exit(1)
-
+    attempt = 0
     modified_content = file_content
     total_replacements = 0
 
-    for original_block, new_block in matches:
-        if original_block not in modified_content:
-            click.secho(f"Error: The following original block was not found in the file:\n{original_block}", fg="red", err=True)
+    while attempt <= retries:
+        if attempt > 0:
+            click.secho(f"Retrying consultation (Attempt {attempt}/{retries})...", fg="yellow", err=True)
+
+        click.secho(f"Consulting {model}...", fg="yellow", err=True)
+        kwargs = {"model": routed_model, "messages": messages}
+        if api_base:
+            kwargs["api_base"] = api_base
+        if api_key:
+            kwargs["api_key"] = api_key
+
+        try:
+            response = litellm.completion(**kwargs)
+            reply = response.choices[0].message.content
+
+            usage_data = {}
+            if hasattr(response, 'usage') and response.usage:
+                if hasattr(response.usage, 'model_dump'):
+                    usage_data = response.usage.model_dump()
+                elif hasattr(response.usage, 'dict'):
+                    usage_data = response.usage.dict()
+
+            json_path, md_path = log_interaction(
+                model=model,
+                routed_model=routed_model,
+                system=system_prompt,
+                full_prompt=messages[-1]["content"],
+                reply=reply,
+                usage_data=usage_data,
+                no_log=no_log
+            )
+
+            if not no_log:
+                click.secho(f"Logged to {json_path} and {md_path}", fg="cyan", err=True)
+
+        except Exception as e:
+            click.secho(f"API Error: {str(e)}", fg="red", err=True)
             sys.exit(1)
-        
-        modified_content = modified_content.replace(original_block, new_block, 1)
-        total_replacements += 1
+
+        pattern = r"(?:<|=|\s)*REPLACEMENT_START(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_WITH(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_END(?:>|=|\s)*"
+        matches = re.findall(pattern, reply, re.DOTALL)
+
+        error_feedback = None
+
+        if not matches:
+            error_feedback = (
+                "Error: No valid replacement blocks found in the model response. Expected format:\n"
+                "<<<< REPLACEMENT_START >>>>\n"
+                "[exact original code blocks to match]\n"
+                "==== REPLACEMENT_WITH ====\n"
+                "[new replacement code blocks]\n"
+                "<<<< REPLACEMENT_END >>>>"
+            )
+        else:
+            modified_content = file_content
+            total_replacements = 0
+            for original_block, new_block in matches:
+                if original_block not in modified_content:
+                    error_feedback = (
+                        f"Error: The following original block was not found in the file:\n"
+                        f"```\n{original_block}\n```\n"
+                        f"Please ensure you match the original source code lines exactly, "
+                        f"including all indentation, spaces, and formatting."
+                    )
+                    break
+                modified_content = modified_content.replace(original_block, new_block, 1)
+                total_replacements += 1
+
+            if not error_feedback:
+                # Syntax Check based on file extension
+                file_ext = Path(file).suffix.lower()
+                if file_ext == '.py':
+                    try:
+                        compile(modified_content, file, 'exec')
+                    except SyntaxError as se:
+                        error_feedback = (
+                            f"Syntax Error check failed for Python file:\n"
+                            f"{str(se)}\n"
+                            f"The proposed code changes introduced this syntax issue. Please correct the syntax."
+                        )
+
+        if not error_feedback:
+            # Success!
+            break
+        else:
+            click.secho(f"Patch validation failed: {error_feedback}", fg="red", err=True)
+            if attempt == retries:
+                click.secho("Error: Self-correction limit reached. Unable to generate a valid patch.", fg="red", err=True)
+                sys.exit(1)
+            
+            # Feed the error back to the model for self-correction
+            messages.append({"role": "assistant", "content": reply})
+            messages.append({
+                "role": "user",
+                "content": f"The patch application failed with the following error:\n{error_feedback}\n\nPlease analyze the code and generate a corrected patch block."
+            })
+            attempt += 1
 
     if dry_run:
         click.secho("--- Dry Run Results ---", fg="cyan", bold=True)
