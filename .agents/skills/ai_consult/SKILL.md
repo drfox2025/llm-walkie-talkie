@@ -11,17 +11,23 @@ This skill instructs you (the IDE agent) on how to delegate complex coding, debu
 
 ## Execution Workflow
 
-### Step 1: Map the Workspace (Optional but Recommended)
+### Step 1: Health Check (Optional)
+Before starting, ensure your API connection is valid using the cached health check. This prevents wasting time on timeouts:
+`ash
+walkie health
+`
+
+### Step 2: Map the Workspace (Optional but Recommended)
 Before executing complex changes, generate a lightweight context index of the project to understand dependencies instantly without reading massive files:
 ```bash
 walkie map
 ```
 This generates a highly compressed `llm_context.yaml` and `.walkie/symbols_index.json`.
 
-### Step 2: Target the Issue
+### Step 3: Target the Issue
 Identify the target source file that needs modification. If modifying a large file (>200 lines), identify the precise `start-end` line numbers for the change to drastically cut token costs.
 
-### Step 3: Delegate and Patch
+### Step 4: Delegate and Patch
 Use the automated `walkie consult` command to request modifications and patch the file directly.
 
 ```bash

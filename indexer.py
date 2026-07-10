@@ -1,11 +1,11 @@
-\"\"\"
+"""
 Incremental AST Indexer for ContextPacket generation.
 
 Note: This is an approximate v1 heuristic. It collapses imports by bare module name,
 meaning package-qualified imports or identical basenames across different directories
 may cause false positive reverse dependencies. Also, it only walks top-level AST body nodes,
 so nested or conditionally defined classes/methods remain invisible.
-\"\"\"
+"""
 import ast
 import json
 import os
@@ -76,13 +76,15 @@ def get_file_hash(file_path: Path) -> str:
     except Exception:
         return ""
 
-def build_or_update_symbols_index(workspace_root: Path) -> Dict[str, Any]:
+def build_or_update_symbols_index(workspace_root: Path, force_walk: bool = False) -> Dict[str, Any]:
     """
     Scans the workspace for Python files.
+    - Skips directory walk if index is < 300s old (unless forced).
     - Reuses cached data if mtime & size match.
     - Prunes missing files.
     - Rebuilds reverse dependency graph.
     """
+    import time
     index_path = workspace_root / '.walkie' / 'symbols_index.json'
     
     # Load existing index
@@ -91,6 +93,11 @@ def build_or_update_symbols_index(workspace_root: Path) -> Dict[str, Any]:
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
                 index_data = json.load(f)
+            
+            # TTL optimization: skip walk if index is young
+            if not force_walk and time.time() - index_path.stat().st_mtime < 300:
+                if index_data.get('version') == SYMBOLS_INDEX_VERSION:
+                    return index_data
         except Exception:
             index_data = {}
             

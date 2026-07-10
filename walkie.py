@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from dotenv import load_dotenv, set_key
-import litellm
 
 # Centralized Configuration & Logging Directory
 try:
@@ -17,9 +16,6 @@ try:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR = CONFIG_DIR / 'logs'
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    test_file = LOG_DIR / ".write_test"
-    test_file.write_text("ok", encoding="utf-8")
-    test_file.unlink()
 except Exception:
     CONFIG_DIR = Path(__file__).resolve().parent
     LOG_DIR = CONFIG_DIR / 'logs'
@@ -133,9 +129,46 @@ def cli():
     """LLM Walkie-Talkie: Consult external LLMs from your IDE."""
     pass
 
+
+def health_ok(ttl=3600):
+    p = CONFIG_DIR / "health.json"
+    try:
+        d = json.loads(p.read_text())
+        if time.time() - d["ts"] < ttl and d["ok"]:
+            return True
+    except Exception:
+        pass
+    return None
+
+def write_health(ok: bool):
+    p = CONFIG_DIR / "health.json"
+    try:
+        p.write_text(json.dumps({"ts": time.time(), "ok": ok}))
+    except Exception:
+        pass
+
+@cli.command()
+def health():
+    """Check connection health with TTL caching."""
+    import litellm
+    if health_ok(3600):
+        click.secho("[OK] Connection cached (fresh).", fg="green")
+        sys.exit(0)
+    
+    # Needs real probe
+    try:
+        litellm.completion(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "Hi"}], max_tokens=5)
+        write_health(True)
+        click.secho("[OK] Connection verified via real probe.", fg="green")
+    except Exception as e:
+        write_health(False)
+        click.secho(f"[FAIL] Connection test failed: {e}", fg="red", err=True)
+        sys.exit(1)
+
 @cli.command()
 def setup():
-    """Interactive setup to configure API keys."""
+    """Interactive wizard to configure Walkie-Talkie API keys."""
+    import litellm
     click.secho("LLM Walkie-Talkie Setup", fg="cyan", bold=True)
     click.echo("API Keys will be masked as you type them and validated against expected formats.\n")
 
@@ -741,6 +774,7 @@ def log_interaction(
 @click.option('--no-log', is_flag=True, help="Disable logging to disk.")
 def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extra_body, attach, strip_comments, json_output, stream, no_log):
     """Ask a question to an LLM."""
+    import litellm
     full_prompt, images_list = build_prompt(prompt, prompt_file, attach, strip_comments, model)
     routed_model, api_base, api_key = route_model(model)
 
@@ -872,8 +906,9 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
         click.secho(f"API Error: {str(e)}", fg="red", err=True)
         sys.exit(1)
 
-def call_llm(model: str, messages: List[dict], **opts) -> Tuple[str, dict]:
+def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, dict]:
     """Single entry for litellm.completion. Returns (reply, usage_dict)."""
+    import litellm
     routed, api_base, api_key = route_model(model)
     kwargs = {"model": routed, "messages": messages, "timeout": opts.get("timeout", 45)}
     if api_base: kwargs["api_base"] = api_base
@@ -901,34 +936,52 @@ def call_llm(model: str, messages: List[dict], **opts) -> Tuple[str, dict]:
 
 def extract_patches(reply: str) -> List[Tuple[str, str]]:
     """Extract REPLACEMENT_START / WITH / END blocks from text."""
-    pattern = r"(?:<|=|\s)*REPLACEMENT_START(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_WITH(?:>|=|\s)*\n?(.*?)\n?(?:<|=|\s)*REPLACEMENT_END(?:>|=|\s)*"
+    pattern = r"(?:<+|=+)\s*REPLACEMENT_START\s*(?:>+|=+)\n?(.*?)\n?(?:<+|=+)\s*REPLACEMENT_WITH\s*(?:>+|=+)\n?(.*?)\n?(?:<+|=+)\s*REPLACEMENT_END\s*(?:>+|=+)"
     return re.findall(pattern, reply, re.DOTALL)
-
-def _normalize_block(block: str) -> str:
-    return "\n".join(line.strip().replace("\t", " ") for line in block.splitlines() if line.strip())
 
 def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bool = True) -> Tuple[str, Optional[str]]:
     """Apply replacement patches to content with normalized indentation fallback matching."""
     working = content
     for orig, rep in patches:
         if orig in working:
+            if working.count(orig) > 1:
+                return working, f"Ambiguous patch block: original block matches {working.count(orig)} times. Please provide more context."
             working = working.replace(orig, rep, 1)
             continue
         if normalize:
             orig_lines = [line.strip().replace("\t", " ") for line in orig.splitlines() if line.strip()]
             working_lines = working.splitlines()
-            matched_start = -1
+            matched_starts = []
             
             for idx in range(len(working_lines) - len(orig_lines) + 1):
                 window = [working_lines[idx+i].strip().replace("\t", " ") for i in range(len(orig_lines))]
                 if window == orig_lines:
-                    matched_start = idx
-                    break
+                    matched_starts.append(idx)
             
-            if matched_start != -1:
+            if matched_starts:
+                if len(matched_starts) > 1:
+                    return working, f"Ambiguous patch block: normalized original block matches {len(matched_starts)} times. Please provide more context."
+                
+                matched_start = matched_starts[0]
                 candidate_lines = working_lines[matched_start : matched_start + len(orig_lines)]
                 candidate = "\n".join(candidate_lines)
                 if candidate in working:
+                    # Dynamically re-indent `rep`
+                    leading_ws = ""
+                    if candidate_lines:
+                        leading_ws = candidate_lines[0][:len(candidate_lines[0]) - len(candidate_lines[0].lstrip())]
+                    
+                    rep_lines = rep.splitlines()
+                    if rep_lines:
+                        rep_leading_ws = rep_lines[0][:len(rep_lines[0]) - len(rep_lines[0].lstrip())]
+                        adjusted_rep_lines = []
+                        for r_line in rep_lines:
+                            if r_line.startswith(rep_leading_ws):
+                                adjusted_rep_lines.append(leading_ws + r_line[len(rep_leading_ws):])
+                            else:
+                                adjusted_rep_lines.append(leading_ws + r_line.lstrip())
+                        rep = "\n".join(adjusted_rep_lines)
+                    
                     working = working.replace(candidate, rep, 1)
                     continue
         return working, f"Original block not found:\n```\n{orig}\n```"
@@ -1007,7 +1060,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
     if not no_context_packet:
         try:
             import indexer
-            idx = indexer.build_or_update_symbols_index(Path.cwd())
+            idx = indexer.build_or_update_symbols_index(Path.cwd(), force_walk=True)
             packet = indexer.compile_context_packet(Path(s_file), Path.cwd(), idx)
             if packet:
                 system_prompt += f"\n\n{packet}"
@@ -1197,7 +1250,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             reply_verify, v_usage = call_llm(verify_model, [
                 {"role": "system", "content": verify_system},
                 {"role": "user", "content": verify_prompt}
-            ], max_tokens=150)
+            ], max_tokens=500)
             usage_by_model[f"{verify_model}#verify"] = v_usage
             
             # JSON Parse verification
@@ -1253,7 +1306,7 @@ def map(output, exclude):
         sys.exit(1)
         
     click.secho("Scanning workspace and updating symbols index...", fg="yellow", err=True)
-    idx = indexer.build_or_update_symbols_index(Path.cwd())
+    idx = indexer.build_or_update_symbols_index(Path.cwd(), force_walk=True)
     
     # Project indexer data to legacy map format
     root_path = Path.cwd()
