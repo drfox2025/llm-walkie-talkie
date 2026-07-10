@@ -945,7 +945,7 @@ def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, d
     """Single entry for litellm.completion. Returns (reply, usage_dict)."""
     import litellm
     routed, api_base, api_key = route_model(model)
-    kwargs = {"model": routed, "messages": messages, "timeout": opts.get("timeout", 45)}
+    kwargs = {"model": routed, "messages": messages, "timeout": opts.get("timeout", float(os.environ.get("WALKIE_TIMEOUT", 120.0)))}
     if api_base: kwargs["api_base"] = api_base
     if api_key: kwargs["api_key"] = api_key
     for k in ("max_tokens", "temperature", "top_p", "stream", "extra_body"):
