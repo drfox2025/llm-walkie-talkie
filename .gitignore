@@ -28,3 +28,8 @@ llm_context.yml
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Extra ignores
+.walkie/
+export_for_review/
+walkie_talkie.zip

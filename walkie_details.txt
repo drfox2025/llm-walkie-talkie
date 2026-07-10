@@ -30,5 +30,5 @@ If an attachment exceeds the limit:
 - File protection: Restricts access to the local `.env` file via chmod 0600 on Unix systems so that only the owner can read/write keys.
 
 
-6. TOKEN EFFICIENCY & BENCHMARKING (96% SAVINGS)
-When an agent attempts complex multi-step refactoring internally, it accumulates context exponentially (19M+ tokens in tests). Outsourcing these loops to walkie consult runs them in lightweight sub-processes (costing only ~600 tokens per patch natively via -L), resulting in >96% context token savings for the primary agent and eliminating context drift.
+6. TOKEN EFFICIENCY & BENCHMARKING (CUMULATIVE SAVINGS)
+When an agent attempts complex multi-step refactoring internally, it accumulates context exponentially (19M+ tokens in tests). Outsourcing these loops to walkie consult isolates them into lightweight sub-processes. While the per-patch API cost to the external model remains standard, the primary local agent's context is shielded from exponential growth, resulting in significant cumulative context token savings natively.
