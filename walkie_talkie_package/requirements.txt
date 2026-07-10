@@ -1,4 +1,0 @@
-litellm
-python-dotenv
-click
-colorama

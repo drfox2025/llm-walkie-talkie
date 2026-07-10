@@ -164,7 +164,7 @@ def setup():
         if new_key:
             pattern = cfg.get("pattern")
             if pattern and not re.match(pattern, new_key):
-                click.secho(f"Warning: The entered key does not match the typical pattern for {provider}.", fg="yellow")
+                click.secho(f"Note: The entered key does not match the typical pattern for {provider}.", fg="yellow")
                 if not click.confirm("Do you want to save it anyway?", default=False):
                     click.echo("Skipping key saving.")
                     continue
@@ -951,6 +951,9 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
 @click.option('--no-context-packet', is_flag=True, help="Disable injection of target-scoped ContextPacket.")
 def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments, no_experience, no_context_packet):
     """Automate surgical patching of files with a self-correcting model feedback harness."""
+    if line_range:
+        keep_comments = True
+
     # Sanitize inputs to prevent path traversal
     s_file = sanitize_path(file)
     try:

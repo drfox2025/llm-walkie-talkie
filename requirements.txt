@@ -1,4 +1,4 @@
-litellm
-python-dotenv
-click
-colorama
+litellm>=1.40.0
+python-dotenv>=1.0.0
+click>=8.0.0
+colorama>=0.4.6

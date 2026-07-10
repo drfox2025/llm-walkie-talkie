@@ -44,8 +44,8 @@ It allows Antigravity to pass entire codebases, multi-file contexts, base64 mult
    - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, Fable).
 
 4. **Agent Custom Skill Integration**:
-   - Includes a pre-configured `.agents/skills/ai-consult/SKILL.md` file.
-   - Allows agents to discover and trigger the `ai-consult` workflow automatically, delegating code modifications and reducing native token usage.
+   - Includes a pre-configured `.agents/skills/ai_consult/SKILL.md` file.
+   - Allows agents to discover and trigger the `ai_consult` workflow automatically, delegating code modifications and reducing native token usage.
 
 5. **Context-Aware Line-Aligned Truncation**:
    - Slices attachments to fit the selected model's context limit without breaking line boundaries or cutting code mid-line.

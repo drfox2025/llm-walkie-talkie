@@ -13,9 +13,9 @@ def main():
     print("[1/3] Installing package locally via pip...")
     try:
         subprocess.run([sys.executable, "-m", "pip", "install", "."], check=True)
-        print("✓ Package installed successfully!\n")
+        print("[OK] Package installed successfully!\n")
     except subprocess.CalledProcessError as e:
-        print(f"✗ Failed to install package: {e}")
+        print(f"[FAIL] Failed to install package: {e}")
         sys.exit(1)
 
     # Step 2: Configure API Keys
@@ -29,7 +29,7 @@ def main():
         try:
             subprocess.run([sys.executable, "walkie.py", "setup"], check=True)
         except Exception as e:
-            print(f"✗ Setup failed: {e}")
+            print(f"[FAIL] Setup failed: {e}")
             sys.exit(1)
 
     # Step 3: Install Antigravity Custom Skill
@@ -39,13 +39,13 @@ def main():
     source_skill = Path(__file__).resolve().parent / ".agents" / "skills" / "ai_consult"
     
     if choice == 'y':
-        dest_dir = Path("C:/Users/ADMION/.gemini/config/skills/ai_consult")
+        dest_dir = Path.home() / ".gemini" / "config" / "skills" / "ai_consult"
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_skill / "SKILL.md", dest_dir / "SKILL.md")
-            print(f"✓ Installed globally to {dest_dir}\n")
+            print(f"[OK] Installed globally to {dest_dir}\n")
         except Exception as e:
-            print(f"✗ Failed to install globally: {e}")
+            print(f"[FAIL] Failed to install globally: {e}")
     else:
         workspace_path = input("Enter the absolute path of your active project workspace: ").strip()
         if workspace_path:
@@ -53,9 +53,9 @@ def main():
             try:
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_skill / "SKILL.md", dest_dir / "SKILL.md")
-                print(f"✓ Installed to workspace at {dest_dir}\n")
+                print(f"[OK] Installed to workspace at {dest_dir}\n")
             except Exception as e:
-                print(f"✗ Failed to install to workspace: {e}")
+                print(f"[FAIL] Failed to install to workspace: {e}")
         else:
             print("Skipped skill installation.\n")
 

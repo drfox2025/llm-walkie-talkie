@@ -1,3 +1,11 @@
+\"\"\"
+Incremental AST Indexer for ContextPacket generation.
+
+Note: This is an approximate v1 heuristic. It collapses imports by bare module name,
+meaning package-qualified imports or identical basenames across different directories
+may cause false positive reverse dependencies. Also, it only walks top-level AST body nodes,
+so nested or conditionally defined classes/methods remain invisible.
+\"\"\"
 import ast
 import json
 import os

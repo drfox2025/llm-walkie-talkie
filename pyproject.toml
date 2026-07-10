@@ -15,7 +15,8 @@ license = {text = "MIT"}
 dependencies = [
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
-    "litellm>=1.40.0"
+    "litellm>=1.40.0",
+    "colorama>=0.4.6"
 ]
 
 [project.scripts]
