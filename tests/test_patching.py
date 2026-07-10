@@ -95,3 +95,15 @@ def hello():
     print("Bye")
 '''
     assert new_content == expected
+def test_strip_comments_python_string_triple_quotes():
+    from walkie import _strip_comments
+    code = 'x = "he said \\"\\"\\" loudly"\n# a comment\ny = 1'
+    expected = 'x = "he said \\"\\"\\" loudly"\n\ny = 1'
+    assert _strip_comments(code, 'py') == expected
+
+def test_strip_comments_python_string_triple_quotes():
+    from walkie import _strip_comments
+    code = 'x = "he said \\"\\"\\" loudly"\n# a comment\ny = 1'
+    expected = 'x = "he said \\"\\"\\" loudly"\n\ny = 1'
+    assert _strip_comments(code, 'py') == expected
+

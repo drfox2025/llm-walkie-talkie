@@ -171,20 +171,26 @@ def cli():
     pass
 
 
-def health_ok(ttl=3600):
+def health_ok(model: str, ttl=3600):
     p = CONFIG_DIR / "health.json"
     try:
-        d = json.loads(p.read_text())
-        if time.time() - d["ts"] < ttl and d["ok"]:
-            return True
+        data = json.loads(p.read_text())
+        if "models" in data and model in data["models"]:
+            d = data["models"][model]
+            if time.time() - d["ts"] < ttl and d["ok"]:
+                return True
     except Exception:
         pass
     return None
 
-def write_health(ok: bool):
+def write_health(model: str, ok: bool):
     p = CONFIG_DIR / "health.json"
     try:
-        p.write_text(json.dumps({"ts": time.time(), "ok": ok}))
+        data = json.loads(p.read_text()) if p.exists() else {"models": {}}
+        if "models" not in data:
+            data["models"] = {}
+        data["models"][model] = {"ts": time.time(), "ok": ok}
+        p.write_text(json.dumps(data))
     except Exception:
         pass
 
@@ -192,17 +198,17 @@ def write_health(ok: bool):
 @click.option('--model', '-m', default="nvidia/z-ai/glm-5.2", help="Model to probe.")
 def health(model):
     """Check connection health with TTL caching."""
-    if health_ok(3600):
+    if health_ok(model, 3600):
         click.secho("[OK] Connection cached (fresh).", fg="green")
         sys.exit(0)
     
     # Needs real probe
     try:
         call_llm(model=model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, no_log=True)
-        write_health(True)
+        write_health(model, True)
         click.secho(f"[OK] Connection verified via real probe ({model}).", fg="green")
     except Exception as e:
-        write_health(False)
+        write_health(model, False)
         click.secho(f"[FAIL] Connection test failed for {model}: {e}", fg="red", err=True)
         sys.exit(1)
 
@@ -325,7 +331,8 @@ def _strip_comments(code: str, file_ext: str) -> str:
                 i += 1
             continue
         
-        if file_ext == "py":
+        if file_ext == "py" and not in_single_str:
+            matched_triple = False
             for triple in ['"""', "'''"]:
                 if code.startswith(triple, i):
                     idx = code.find(triple, i + 3)
@@ -335,9 +342,10 @@ def _strip_comments(code: str, file_ext: str) -> str:
                     else:
                         result.append(code[i:idx + 3])
                         i = idx + 3
+                    matched_triple = True
                     break
-            else:
-                pass
+            if matched_triple:
+                continue
             if i >= n:
                 continue
         
