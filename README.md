@@ -75,7 +75,7 @@ You do not need paid subscriptions to start consulting high-performing models. W
 3. **OpenRouter (Free Tier Models)**:
    - Visit [OpenRouter API Keys](https://openrouter.ai/keys) and create a key.
    - You can query any OpenRouter model. Search for free models (those carrying the `:free` suffix) to run them at zero cost:
-     - `openrouter/tencent/hy3:free`
+     - `openrouter/google/gemma-2-9b-it:free`
      - `openrouter/google/gemini-2.5-flash:free`
      - `openrouter/meta-llama/llama-3-8b-instruct:free`
 
