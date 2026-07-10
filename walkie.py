@@ -21,6 +21,47 @@ except Exception:
     LOG_DIR = CONFIG_DIR / 'logs'
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+
+SESSION_DIR = CONFIG_DIR / 'sessions'
+SESSION_MAX_TURNS = 20          # hard cap stored on disk
+SESSION_INJECT_TURNS = 6        # how many recent turns to inject into prompt
+SESSION_DIFF_CHAR_CAP = 400     # reuse your chain-diff cap
+
+def _session_path(session_id: str):
+    safe = re.sub(r'[^\w.\-]+', '-', session_id)[:80]
+    return SESSION_DIR / f"{safe}.json"
+
+def load_session(session_id: str):
+    p = _session_path(session_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception as e:
+        click.secho(f"Warning: Could not read session: {safe_error_handler(e)}", fg="yellow", err=True)
+        return None
+
+def save_session(session_id: str, data: dict) -> None:
+    try:
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        data['updated'] = datetime.datetime.now().isoformat()
+        # LRU trim
+        if 'turns' in data:
+            data['turns'] = data['turns'][-SESSION_MAX_TURNS:]
+        if 'messages' in data:
+            if data['messages'] and data['messages'][0].get('role') == 'system':
+                data['messages'] = [data['messages'][0]] + data['messages'][-(SESSION_MAX_TURNS-1):]
+            else:
+                data['messages'] = data['messages'][-SESSION_MAX_TURNS:]
+        p = _session_path(session_id)
+        tmp = p.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        if os.name != 'nt':
+            os.chmod(tmp, 0o600)
+        tmp.replace(p)   # atomic
+    except Exception as e:
+        click.secho(f"Warning: Could not save session: {safe_error_handler(e)}", fg="yellow", err=True)
+
 env_path = CONFIG_DIR / '.env'
 if env_path.exists():
     load_dotenv(dotenv_path=env_path)
@@ -760,15 +801,21 @@ def log_interaction(
 @click.option('--json-output', is_flag=True, help="Format CLI output as JSON.")
 @click.option('--stream', is_flag=True, help="Stream response in real-time.")
 @click.option('--no-log', is_flag=True, help="Disable logging to disk.")
-def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extra_body, attach, strip_comments, json_output, stream, no_log):
+@click.option('--session', help="Continue a conversational session (full history replay).")
+def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extra_body, attach, strip_comments, json_output, stream, no_log, session):
     """Ask a question to an LLM."""
     import litellm
     full_prompt, images_list = build_prompt(prompt, prompt_file, attach, strip_comments, model)
     routed_model, api_base, api_key = route_model(model)
 
+    session_data = load_session(session) if session else None
+    history = session_data.get("messages", []) if session_data else []
+
     messages = []
-    if system:
+    if system and not history:
         messages.append({"role": "system", "content": system})
+    
+    messages.extend(history)
 
     if images_list:
         user_content = [{"type": "text", "text": full_prompt}]
@@ -961,10 +1008,17 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
                     
                     rep_lines = rep.splitlines()
                     if rep_lines:
-                        rep_leading_ws = rep_lines[0][:len(rep_lines[0]) - len(rep_lines[0].lstrip())]
+                        non_blank = [line for line in rep_lines if line.strip()]
+                        if non_blank:
+                            rep_leading_ws = min((line[:len(line) - len(line.lstrip())] for line in non_blank), key=len)
+                        else:
+                            rep_leading_ws = ""
+                            
                         adjusted_rep_lines = []
                         for r_line in rep_lines:
-                            if r_line.startswith(rep_leading_ws):
+                            if r_line.strip() == "":
+                                adjusted_rep_lines.append("")
+                            elif r_line.startswith(rep_leading_ws):
                                 adjusted_rep_lines.append(leading_ws + r_line[len(rep_leading_ws):])
                             else:
                                 adjusted_rep_lines.append(leading_ws + r_line.lstrip())
@@ -990,7 +1044,8 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
 @click.option('--keep-comments', is_flag=True, help="Disable comment stripping (comments are stripped by default).")
 @click.option('--no-experience', is_flag=True, help="Disable experience learning and loading lessons from past sessions.")
 @click.option('--no-context-packet', is_flag=True, help="Disable injection of target-scoped ContextPacket.")
-def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments, no_experience, no_context_packet):
+@click.option('--session', help="Persist/continue a compact session (task + diffs) across invocations.")
+def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments, no_experience, no_context_packet, session):
     """Automate surgical patching of files with a self-correcting model feedback harness."""
     if line_range:
         keep_comments = True
@@ -1059,7 +1114,22 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
     if not no_experience:
         system_prompt += load_experience_prompt(file_ext)
 
+    session_data = load_session(session) if session else None
+
     base_user_prompt = f"Task: {task}\n\nTarget File: {s_file}\n"
+    
+    if session_data:
+        turns = session_data.get('turns', [])[-SESSION_INJECT_TURNS:]
+        if turns:
+            block = ["\n### Prior work in THIS session (oldest → newest):"]
+            for t in turns:
+                block.append(f"- [{t.get('file')}] {t.get('task')}")
+                for d in t.get('diffs', []):
+                    block.append(d)
+            base_user_prompt += "\n" + "\n".join(block) + "\n"
+        click.secho(f"Continuing session '{session}' ({len(session_data.get('turns', []))} prior turns).", fg="cyan", err=True)
+    elif session:
+        click.secho(f"Starting new session '{session}'.", fg="cyan", err=True)
     if line_range:
         base_user_prompt += f"Target Line Range: {start_line}-{end_line}\n"
     base_user_prompt += f"```\n{targeted_content}\n```\n"
@@ -1341,6 +1411,32 @@ def map(output, exclude):
     except Exception as e:
         click.secho(f"Error saving project map: {str(e)}", fg="red", err=True)
         sys.exit(1)
+
+
+@cli.command(name='session')
+@click.argument('action', type=click.Choice(['list', 'show', 'clear']))
+@click.argument('session_id', required=False)
+def session_cmd(action, session_id):
+    """Manage saved sessions."""
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    if action == 'list':
+        for p in sorted(SESSION_DIR.glob("*.json")):
+            try:
+                d = json.loads(p.read_text(encoding='utf-8'))
+                n = len(d.get('turns', d.get('messages', [])))
+                click.echo(f"{p.stem:30} turns/msgs={n:<4} updated={d.get('updated','?')}")
+            except Exception:
+                click.echo(f"{p.stem:30} [unreadable]")
+    elif action == 'show' and session_id:
+        d = load_session(session_id)
+        click.echo(json.dumps(d, indent=2) if d else "Not found.")
+    elif action == 'clear' and session_id:
+        p = _session_path(session_id)
+        if p.exists():
+            p.unlink()
+            click.secho(f"Cleared session '{session_id}'.", fg="green")
+        else:
+            click.secho("Not found.", fg="yellow")
 
 if __name__ == '__main__':
     cli()

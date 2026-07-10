@@ -72,3 +72,26 @@ def test_apply_patches_normalized_ambiguous():
     new_code, error = apply_patches(original_code, patches, normalize=True)
     assert error is not None
     assert "Ambiguous patch block: normalized original block matches 2 times" in error
+
+def test_apply_patches_mixed_indentation():
+    content = '''
+def hello():
+    if True:
+        print("Hi")
+'''
+    orig = '''
+        print("Hi")
+'''
+    rep = '''
+        print("Hi")
+    print("Bye")
+'''
+    new_content, error = apply_patches(content, [(orig, rep)])
+    assert error is None
+    expected = '''
+def hello():
+    if True:
+        print("Hi")
+    print("Bye")
+'''
+    assert new_content == expected
