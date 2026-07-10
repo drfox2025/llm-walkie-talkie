@@ -948,7 +948,8 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
 @click.option('--chain-model', '-c', multiple=True, help="Sequential models after the primary model to refine changes.")
 @click.option('--keep-comments', is_flag=True, help="Disable comment stripping (comments are stripped by default).")
 @click.option('--no-experience', is_flag=True, help="Disable experience learning and loading lessons from past sessions.")
-def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments, no_experience):
+@click.option('--no-context-packet', is_flag=True, help="Disable injection of target-scoped ContextPacket.")
+def consult(file, task, model, system, attach, dry_run, no_log, retries, line_range, verify_model, chain_model, keep_comments, no_experience, no_context_packet):
     """Automate surgical patching of files with a self-correcting model feedback harness."""
     # Sanitize inputs to prevent path traversal
     s_file = sanitize_path(file)
@@ -999,6 +1000,17 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             "Do not add new imports or redeclare classes/functions that are defined globally. Focus ONLY on modifying this segment in place. "
             "Assume all global imports and variables are already available."
         )
+    
+    if not no_context_packet:
+        try:
+            import indexer
+            idx = indexer.build_or_update_symbols_index(Path.cwd())
+            packet = indexer.compile_context_packet(Path(s_file), Path.cwd(), idx)
+            if packet:
+                system_prompt += f"\n\n{packet}"
+        except Exception as e:
+            click.secho(f"Warning: Failed to compile ContextPacket: {str(e)}", fg="yellow", err=True)
+
 
     if not no_experience:
         system_prompt += load_experience_prompt(file_ext)
@@ -1230,14 +1242,17 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
 @click.option('--exclude', '-e', multiple=True, help="Glob patterns of files/directories to exclude.")
 def map(output, exclude):
     """Generate a highly compressed, token-efficient YAML map of the codebase for LLMs."""
-    import fnmatch
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    try:
+        import indexer
+        import yaml as yaml_lib
+    except ImportError as e:
+        click.secho(f"Missing dependency: {str(e)}", fg="red", err=True)
+        sys.exit(1)
+        
+    click.secho("Scanning workspace and updating symbols index...", fg="yellow", err=True)
+    idx = indexer.build_or_update_symbols_index(Path.cwd())
     
-    excludes = list(exclude) if exclude else [
-        ".git", "__pycache__", "node_modules", "build", "dist", 
-        ".walkie", "walkie_talkie.zip", "logs", "*.egg-info", "*.pyc"
-    ]
-    
+    # Project indexer data to legacy map format
     root_path = Path.cwd()
     project_map = {
         "project_name": root_path.name,
@@ -1248,102 +1263,34 @@ def map(output, exclude):
         "mermaid_dependencies": ""
     }
     
-    files_to_parse = []
-    config_files = []
-    
-    click.secho("Scanning workspace...", fg="yellow", err=True)
-    
-    for dirpath, dirnames, filenames in os.walk(root_path):
-        # Filter directories in place
-        dirnames[:] = [d for d in dirnames if not any(fnmatch.fnmatch(d, pat) for pat in excludes)]
-        
-        for filename in filenames:
-            if any(fnmatch.fnmatch(filename, pat) for pat in excludes):
-                continue
-            
-            filepath = Path(dirpath) / filename
-            rel_filepath = filepath.relative_to(root_path)
-            rel_str = str(rel_filepath).replace("\\", "/")
-            
-            project_map["directory_structure"].append(rel_str)
-            
-            if filename.endswith(".py"):
-                files_to_parse.append((filepath, rel_str))
-            elif filename in ("requirements.txt", "pyproject.toml"):
-                config_files.append((filepath, filename))
-
-    def parse_python_file(filepath, rel_str):
-        try:
-            if filepath.stat().st_size > 1_000_000:
-                return rel_str, {"error": "File size exceeds 1MB limit"}, []
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                code = f.read()
-            import ast as ast_lib
-            tree = ast_lib.parse(code)
-            module_info = {
-                "classes": [],
-                "functions": [],
-                "imports": []
+    files = idx.get('files', {})
+    for rel_path, data in files.items():
+        if data.get('language') == 'python':
+            project_map["python_modules"][rel_path] = {
+                "classes": data.get('classes', []),
+                "functions": data.get('functions', [])
             }
-            for node in ast_lib.walk(tree):
-                if isinstance(node, ast_lib.ClassDef):
-                    methods = [n.name for n in node.body if isinstance(n, ast_lib.FunctionDef)]
-                    module_info["classes"].append({
-                        "name": node.name,
-                        "methods": methods
-                    })
-            for child in tree.body:
-                if isinstance(child, ast_lib.FunctionDef):
-                    module_info["functions"].append(child.name)
-                elif isinstance(child, ast_lib.Import):
-                    for name in child.names:
-                        module_info["imports"].append(name.name)
-                elif isinstance(child, ast_lib.ImportFrom):
-                    if child.module:
-                        module_info["imports"].append(child.module)
-            return rel_str, {
-                "classes": module_info["classes"],
-                "functions": module_info["functions"]
-            }, module_info["imports"]
-        except Exception as e:
-            return rel_str, {"error": f"Failed to parse AST: {str(e)}"}, []
-
-    modules_list = [Path(fp).stem for fp, _ in files_to_parse]
-    imports_map = {}
+            project_map["directory_structure"].append(rel_path)
     
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(parse_python_file, fp, r_str): (fp, r_str) for fp, r_str in files_to_parse}
-        for future in as_completed(futures):
-            r_str, info, imports = future.result()
-            project_map["python_modules"][r_str] = info
-            stem = Path(futures[future][0]).stem
-            imports_map[stem] = imports
-
-    for filepath, filename in config_files:
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            project_map["config_files"][filename] = content.splitlines()[:15]
-        except Exception:
-            pass
-
-    # Build Mermaid dependency flow
+    # Simple mermaid graph from reverse_deps
     mermaid_lines = ["graph TD"]
     has_edges = False
-    for mod, imps in imports_map.items():
-        for imp in imps:
-            base_imp = imp.split('.')[0]
-            if base_imp in modules_list and base_imp != mod:
-                mermaid_lines.append(f"    {mod} --> {base_imp}")
+    reverse_deps = idx.get('reverse_deps', {})
+    modules_list = [Path(p).stem for p in files.keys()]
+    
+    for mod, importers in reverse_deps.items():
+        for imp_file in importers:
+            imp_stem = Path(imp_file).stem
+            if mod in modules_list and mod != imp_stem:
+                mermaid_lines.append(f"    {imp_stem} --> {mod}")
                 has_edges = True
                 
     if has_edges:
         project_map["mermaid_dependencies"] = "\n".join(mermaid_lines)
     else:
         project_map["mermaid_dependencies"] = "graph TD\n    NoLocalDependencies"
-        
+
     try:
-        import yaml as yaml_lib
         with open(output, 'w', encoding='utf-8') as f:
             yaml_lib.dump(project_map, f, sort_keys=False)
         click.secho(f"Success! Codebase map saved to {output}", fg="green")
