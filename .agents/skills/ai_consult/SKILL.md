@@ -1,13 +1,13 @@
 ---
 name: ai-consult
-description: Automate code generation, bug fixing, and surgical refactoring by consulting external models (GLM 5.2 / DeepSeek V4 Pro) and automatically patching local source files while reducing native agent token consumption by over 95%.
+description: Automate code generation, bug fixing, and surgical refactoring by consulting external models (GLM 5.2 / DeepSeek V4 Pro) and automatically patching local source files while significantly reducing native agent context token consumption.
 ---
 
 # Skill: ai-consult
 
 This skill instructs you (the IDE agent) on how to delegate complex coding, debugging, or optimization tasks to a more powerful external consultant model (e.g., `nvidia/deepseek-ai/deepseek-v4-pro` or `nvidia/z-ai/glm-5.2` via `walkie`). This lets the CLI program patch the local codebase automatically using the built-in `consult` command.
 
-**CRITICAL ADVANTAGE**: Delegating tasks via this skill is proven to save over **96% of your internal context tokens** (dropping from ~15,000+ tokens per turn to ~600 tokens externally) and prevents cognitive context drift. 
+**CRITICAL ADVANTAGE**: Delegating tasks via this skill is proven to save significant internal context tokens by eliminating exponential context bloat and prevents cognitive context drift. 
 
 ## Execution Workflow
 

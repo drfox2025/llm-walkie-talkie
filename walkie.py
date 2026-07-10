@@ -56,13 +56,13 @@ PROVIDERS = {
     "ZENMUX": {
         "env_var": "ZENMUX_API_KEY",
         "description": "ZenMux API Key (provides free GLM 5.2 and others)",
-        "test_model": "openai/glm-4",
+        "test_model": "zenmux/glm-4",
         "api_base": "https://zenmux.ai/api/v1"
     },
     "NVIDIA": {
         "env_var": "NVIDIA_API_KEY",
         "description": "NVIDIA API Key (NIM integration gateway)",
-        "test_model": "z-ai/glm-5.2",
+        "test_model": "nvidia/z-ai/glm-5.2",
         "api_base": "https://integrate.api.nvidia.com/v1"
     },
     "GROQ": {
@@ -72,7 +72,7 @@ PROVIDERS = {
     },
     "OPENROUTER": {
         "env_var": "OPENROUTER_API_KEY",
-        "description": "OpenRouter API Key (access to various free and paid models. Note: tencent/hy3:free is deprecating on July 21st, 2026)",
+        "description": "OpenRouter API Key (access to various free and paid models. Note: use google/gemma-2-9b-it:free for a reliable free option)",
         "test_model": "openrouter/auto",
         "api_base": "https://openrouter.ai/api/v1"
     },
@@ -84,12 +84,12 @@ PROVIDERS = {
     "OPENAI": {
         "env_var": "OPENAI_API_KEY",
         "description": "OpenAI API Key",
-        "test_model": "gpt-3.5-turbo",
+        "test_model": "openai/gpt-3.5-turbo",
     },
     "ANTHROPIC": {
         "env_var": "ANTHROPIC_API_KEY",
         "description": "Anthropic API Key",
-        "test_model": "claude-3-haiku-20240307",
+        "test_model": "anthropic/claude-3-haiku-20240307",
     }
 }
 
@@ -148,27 +148,26 @@ def write_health(ok: bool):
         pass
 
 @cli.command()
-def health():
+@click.option('--model', '-m', default="nvidia/z-ai/glm-5.2", help="Model to probe.")
+def health(model):
     """Check connection health with TTL caching."""
-    import litellm
     if health_ok(3600):
         click.secho("[OK] Connection cached (fresh).", fg="green")
         sys.exit(0)
     
     # Needs real probe
     try:
-        litellm.completion(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "Hi"}], max_tokens=5)
+        call_llm(model=model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, no_log=True)
         write_health(True)
-        click.secho("[OK] Connection verified via real probe.", fg="green")
+        click.secho(f"[OK] Connection verified via real probe ({model}).", fg="green")
     except Exception as e:
         write_health(False)
-        click.secho(f"[FAIL] Connection test failed: {e}", fg="red", err=True)
+        click.secho(f"[FAIL] Connection test failed for {model}: {e}", fg="red", err=True)
         sys.exit(1)
 
 @cli.command()
 def setup():
     """Interactive wizard to configure Walkie-Talkie API keys."""
-    import litellm
     click.secho("LLM Walkie-Talkie Setup", fg="cyan", bold=True)
     click.echo("API Keys will be masked as you type them and validated against expected formats.\n")
 
@@ -211,22 +210,11 @@ def setup():
 
             click.echo(f"Verifying {provider} connection...")
             try:
-                api_base = info.get("api_base")
-                api_key = new_key
+                # We dynamically route this via call_llm so it mimics real execution
                 model = info["test_model"]
-
-                kwargs = {
-                    "model": model,
-                    "messages": [{"role": "user", "content": "Hi"}],
-                    "max_tokens": 5
-                }
-                if api_base:
-                    kwargs["api_base"] = api_base
-                    kwargs["api_key"] = api_key
-                else:
-                    kwargs["api_key"] = api_key
-
-                litellm.completion(**kwargs)
+                
+                # Temporarily set the env var in case call_llm needs it (already done above)
+                call_llm(model=model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, no_log=True)
                 click.secho(f"Success! {provider} is working.", fg="green")
             except Exception as e:
                 click.secho(f"Failed to verify {provider}: {str(e)}", fg="red")
