@@ -49,6 +49,9 @@ def save_session(session_id: str, data: dict) -> None:
         if 'turns' in data:
             data['turns'] = data['turns'][-SESSION_MAX_TURNS:]
         if 'messages' in data:
+            # Note: SESSION_MAX_TURNS represents individual message entries here, 
+            # so an exchange (user+assistant) consumes 2 turns. This means 
+            # a cap of 20 equates to ~10 conversational exchanges.
             if data['messages'] and data['messages'][0].get('role') == 'system':
                 data['messages'] = [data['messages'][0]] + data['messages'][-(SESSION_MAX_TURNS-1):]
             else:
