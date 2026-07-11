@@ -633,7 +633,7 @@ def build_prompt(
     attach: List[str],
     strip_comments: bool,
     model: str
-) -> Tuple[str, List[str]]:
+) -> Tuple[str, List[str], str]:
     """Compiles prompt, reads files, handles newline-aligned context-aware chunking limits, and extracts base64 images."""
     import base64
     max_chars = 300000  # Default ~100k tokens
