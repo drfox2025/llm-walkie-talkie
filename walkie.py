@@ -671,6 +671,7 @@ def build_prompt(
         else:
             full_prompt = stdin_content
 
+    raw_prompt = full_prompt
     images_list = []
     if attach:
         attachment_blocks = []
@@ -736,7 +737,7 @@ def build_prompt(
         if attachment_blocks:
             full_prompt += "\n\n### Attached Files Context:\n" + "\n".join(attachment_blocks)
 
-    return full_prompt, images_list
+    return full_prompt, images_list, raw_prompt
 
 def log_interaction(
     model: str,
@@ -816,8 +817,11 @@ def log_interaction(
 def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extra_body, attach, strip_comments, json_output, stream, no_log, session):
     """Ask a question to an LLM."""
     import litellm
-    full_prompt, images_list = build_prompt(prompt, prompt_file, attach, strip_comments, model)
+    full_prompt, images_list, raw_prompt = build_prompt(prompt, prompt_file, attach, strip_comments, model)
     routed_model, api_base, api_key = route_model(model)
+
+    if session and (attach or images_list):
+        click.secho("Notice: Attachments are point-in-time context and will not be saved into the session history.", fg="cyan", err=True)
 
     session_data = load_session(session) if session else None
     history = session_data.get("messages", []) if session_data else []
@@ -921,13 +925,9 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
             sd = session_data or {"id": session, "created": datetime.datetime.now().isoformat(), "messages": []}
             if system and not sd["messages"]:
                 sd["messages"].append({"role": "system", "content": system})
-            if images_list:
-                user_content = [{"type": "text", "text": full_prompt}]
-                for img_url in images_list:
-                    user_content.append({"type": "image_url", "image_url": {"url": img_url}})
-                sd["messages"].append({"role": "user", "content": user_content})
-            else:
-                sd["messages"].append({"role": "user", "content": full_prompt})
+            
+            # Save only the raw text prompt (no point-in-time attachments/images) to prevent ballooning context
+            sd["messages"].append({"role": "user", "content": raw_prompt})
             sd["messages"].append({"role": "assistant", "content": reply})
             save_session(session, sd)
 
@@ -1138,6 +1138,9 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
 
     if not no_experience:
         system_prompt += load_experience_prompt(file_ext)
+
+    if session and (attach or images_list):
+        click.secho("Notice: Attachments are point-in-time context and will not be saved into the session history.", fg="cyan", err=True)
 
     session_data = load_session(session) if session else None
 
