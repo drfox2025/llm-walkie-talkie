@@ -917,6 +917,20 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
             if not json_output and sys.stdout.isatty():
                 click.echo("\n" + "-" * 40)
 
+        if session:
+            sd = session_data or {"id": session, "created": datetime.datetime.now().isoformat(), "messages": []}
+            if system and not sd["messages"]:
+                sd["messages"].append({"role": "system", "content": system})
+            if images_list:
+                user_content = [{"type": "text", "text": full_prompt}]
+                for img_url in images_list:
+                    user_content.append({"type": "image_url", "image_url": {"url": img_url}})
+                sd["messages"].append({"role": "user", "content": user_content})
+            else:
+                sd["messages"].append({"role": "user", "content": full_prompt})
+            sd["messages"].append({"role": "assistant", "content": reply})
+            save_session(session, sd)
+
         json_path, md_path = log_interaction(
             model=model,
             routed_model=routed_model,
@@ -1359,6 +1373,15 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             with open(s_file, 'w', encoding='utf-8') as f:
                 f.write(working_content)
             click.secho(f"Success! Applied {total_replacements} patch(es) to {file}.", fg="green")
+            if session:
+                sd = session_data or {"id": session, "created": datetime.datetime.now().isoformat(), "turns": []}
+                sd["turns"].append({
+                    "ts": datetime.datetime.now().isoformat(),
+                    "file": str(s_file),
+                    "task": task,
+                    "diffs": [f"--- Original ---\n{o[:SESSION_DIFF_CHAR_CAP]}\n=== With ===\n{n[:SESSION_DIFF_CHAR_CAP]}" for o, n in final_patches],
+                })
+                save_session(session, sd)
         except Exception as e:
             click.secho(f"Error saving file {file}: {str(e)}", fg="red", err=True)
             sys.exit(1)
