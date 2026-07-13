@@ -232,11 +232,25 @@ def setup():
         cfg = PROVIDER_CONFIG.get(provider, {})
 
         click.secho(f"--- Configure {provider} ---", fg="blue", bold=True)
-        if cfg.get("url"):
+
+        # NVIDIA: offer step-by-step wizard before prompting for key
+        if provider == "NVIDIA" and not current_val:
+            click.echo("NVIDIA NIM provides free GPU-hosted models (40 RPM free tier).")
+            click.echo("To get your free nvapi- key:")
+            if click.confirm("  Open the NVIDIA developer portal in your browser now?", default=True):
+                import webbrowser
+                webbrowser.open("https://build.nvidia.com")
+            click.echo("")
+            click.echo("  Step 1: Sign in or create a free NVIDIA Developer account.")
+            click.echo("  Step 2: Browse to 'Models' > choose any model (e.g., GLM-5.2).")
+            click.echo("  Step 3: Click 'Get API Key' — select a model endpoint if prompted.")
+            click.echo("  Step 4: Copy your key (starts with nvapi-). It is valid for 90 days.")
+            click.echo("")
+        elif cfg.get("url"):
             click.echo(f"Help URL: {cfg['url']}")
 
         if current_val:
-            click.echo(f"Current key is set (starts with {current_val[:4]}...)")
+            click.echo(f"Current key is set (starts with {current_val[:6]}...)")
             update = click.confirm("Do you want to update this key?", default=False)
             if not update:
                 continue
@@ -260,18 +274,41 @@ def setup():
 
             click.echo(f"Verifying {provider} connection...")
             try:
-                # We dynamically route this via call_llm so it mimics real execution
                 model = info["test_model"]
-                
-                # Temporarily set the env var in case call_llm needs it (already done above)
                 call_llm(model=model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, no_log=True)
-                click.secho(f"Success! {provider} is working.", fg="green")
+                click.secho(f"✅ Success! {provider} is working.", fg="green")
+
+                # Auto-discover models for this provider after successful setup
+                click.secho(f"🔍 Discovering available models on {provider}...", fg="cyan")
+                try:
+                    import discovery as disc
+                    registry, _ = disc.run_discovery(force=True)
+                    prov_upper = provider.upper()
+                    prov_models = [
+                        (c, e) for c, e in disc.rank_free_models(registry, use_case="coding")
+                        if any(r["provider"] == prov_upper for r in e.get("routes", []))
+                    ][:5]
+                    if prov_models:
+                        click.echo(f"  Top models available on {provider}:")
+                        for canonical, entry in prov_models:
+                            tags = ", ".join(entry.get("tags", [])[:2])
+                            routes = [r for r in entry["routes"] if r["provider"] == prov_upper]
+                            ctx = max((r.get("context_length") or 0) for r in routes)
+                            ctx_str = f"{ctx // 1000}K" if ctx >= 1000 else "-"
+                            click.echo(f"    • {canonical:<22} ctx={ctx_str:<6} [{tags}]")
+                    else:
+                        click.echo("  No free models found for this provider yet.")
+                except Exception:
+                    pass  # discovery failure is non-fatal
+
             except Exception as e:
-                click.secho(f"Failed to verify {provider}: {str(e)}", fg="red")
+                click.secho(f"❌ Failed to verify {provider}: {str(e)}", fg="red")
 
     if os.name != 'nt' and env_path.exists():
         os.chmod(env_path, 0o600)
     click.secho("\nSetup complete!", fg="green")
+    click.secho("Tip: Run `walkie discover --coding-only` to see all available free models.", fg="cyan")
+    click.secho("Tip: Run `walkie status` to see connection status for all providers.", fg="cyan")
 
 def _strip_comments(code: str, file_ext: str) -> str:
     """
@@ -752,6 +789,15 @@ def log_interaction(
     if no_log:
         return None, None
 
+    # Scrub any API key values that may appear in prompts or errors
+    try:
+        from discovery import mask_keys as _mask_keys
+        full_prompt_safe = _mask_keys(full_prompt)
+        system_safe = _mask_keys(system or "")
+        reply_safe = _mask_keys(reply or "")
+    except Exception:
+        full_prompt_safe, system_safe, reply_safe = full_prompt, system or "", reply or ""
+
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     safe_model = re.sub(r'[^\w.\-]+', '-', model)[:80]
 
@@ -759,9 +805,9 @@ def log_interaction(
         "timestamp": timestamp,
         "model": model,
         "routed_model": routed_model,
-        "system_prompt": system,
-        "user_prompt": full_prompt,
-        "response": reply,
+        "system_prompt": system_safe,
+        "user_prompt": full_prompt_safe,
+        "response": reply_safe,
         "usage": usage_data
     }
     json_path = LOG_DIR / f"{timestamp}_{safe_model}.json"
@@ -1474,6 +1520,192 @@ def session_cmd(action, session_id):
             click.secho(f"Cleared session '{session_id}'.", fg="green")
         else:
             click.secho("Not found.", fg="yellow")
+
+# ── Discovery commands ─────────────────────────────────────────────────────────
+
+@cli.command("discover")
+@click.option("--provider", "-p", default="all",
+              type=click.Choice(["all", "openrouter", "nvidia"], case_sensitive=False),
+              help="Limit scan to a specific provider.")
+@click.option("--coding-only", is_flag=True, help="Show only models tagged for coding/reasoning.")
+@click.option("--force", is_flag=True, help="Bypass 24h cache and force fresh scan.")
+@click.option("--json-output", is_flag=True, help="Output as JSON.")
+def discover(provider, coding_only, force, json_output):
+    """Scan providers for free LLM models and update the local model registry."""
+    import discovery as disc
+
+    click.secho("🔍 Scanning for free models...", fg="cyan", err=True)
+
+    registry, diff = disc.run_discovery(force=force)
+    logical = registry.get("logical_models", {})
+
+    if coding_only:
+        logical = {k: v for k, v in logical.items()
+                   if any(t in v.get("tags", []) for t in ("coding", "reasoning"))}
+
+    if provider != "all":
+        prov_upper = provider.upper()
+        logical = {
+            k: {**v, "routes": [r for r in v["routes"] if r["provider"] == prov_upper]}
+            for k, v in logical.items()
+        }
+        logical = {k: v for k, v in logical.items() if v["routes"]}
+
+    if json_output:
+        click.echo(json.dumps({"models": logical, "diff": diff}, indent=2))
+        return
+
+    if not logical:
+        click.secho("No free models found matching the criteria.", fg="yellow")
+        return
+
+    priority = registry.get("provider_priority", disc.PROVIDER_PRIORITY)
+    rows = disc.rank_free_models(registry, use_case="coding")
+    filtered_rows = [(c, e) for c, e in rows if c in logical]
+
+    click.echo("")
+    # Table header
+    click.echo(f"  {'Canonical':<22} {'Providers':<26} {'Context':>8}  {'Tags':<22} {'Routes':>6}")
+    click.echo("  " + "─" * 88)
+
+    for canonical, entry in filtered_rows:
+        routes = [r for r in entry["routes"] if r["provider"] in
+                  {k for k in disc.PROVIDER_PRIORITY}]
+        if not routes:
+            continue
+        pri_idx = disc.elect_primary_idx(routes, priority)
+        provider_str = ", ".join(
+            (f"{r['provider']} ★" if i == pri_idx else r["provider"])
+            for i, r in enumerate(routes)
+        )
+        max_ctx = max((r.get("context_length") or 0) for r in routes)
+        ctx_str = f"{max_ctx // 1000}K" if max_ctx >= 1000 else (str(max_ctx) if max_ctx else "-")
+        tags_str = ", ".join(entry.get("tags", [])[:3])
+        route_count = len(routes)
+        click.echo(f"  {canonical:<22} {provider_str:<26} {ctx_str:>8}  {tags_str:<22} {route_count:>6}")
+
+    if diff["added"]:
+        click.echo("")
+        click.secho(f"💡 NEW since last scan: {', '.join(diff['added'])}", fg="green")
+    if diff["removed"]:
+        click.secho(f"⚠️  Removed since last scan: {', '.join(diff['removed'])}", fg="yellow")
+
+    click.echo("")
+    click.secho(f"  Total: {len(filtered_rows)} model(s). To connect: walkie setup", fg="cyan")
+
+
+@cli.command("status")
+@click.option("--sweep", is_flag=True,
+              help="Live-probe each provider with a real API call (slow but accurate).")
+@click.option("--json-output", is_flag=True, help="Output as JSON.")
+def status(sweep, json_output):
+    """Show health status for all configured LLM providers."""
+    import discovery as disc
+
+    registry = disc.load_registry()
+
+    # Count fallback routes per provider
+    provider_route_counts: Dict[str, int] = {}
+    for entry in registry.get("logical_models", {}).values():
+        for route in entry.get("routes", []):
+            p = route["provider"]
+            provider_route_counts[p] = provider_route_counts.get(p, 0) + 1
+
+    def _probe(model_id: str, api_base: Optional[str], api_key: str):
+        import time as _time
+        t0 = _time.monotonic()
+        try:
+            reply, _ = call_llm(
+                model=model_id,
+                messages=[{"role": "user", "content": "Hi"}],
+                max_tokens=3,
+                no_log=True,
+            )
+            latency = (_time.monotonic() - t0) * 1000
+            return True, latency, None
+        except Exception as e:
+            return False, None, str(e)
+
+    if sweep:
+        click.secho("⏳ Running live probes (this may take ~30s)...", fg="yellow", err=True)
+        results = disc.sweep_configured_providers(_probe)
+    else:
+        # Use cached health data
+        health_cache = {}
+        try:
+            p = CONFIG_DIR / "health.json"
+            if p.exists():
+                health_cache = json.loads(p.read_text()).get("models", {})
+        except Exception:
+            pass
+
+        results = []
+        for name, info in PROVIDERS.items():
+            env_val = os.getenv(info["env_var"])
+            test_model = info["test_model"]
+            cached = health_cache.get(test_model, {})
+            if not env_val:
+                status_str = "no_key"
+                latency = None
+            elif cached.get("ok"):
+                status_str = "ok"
+                latency = None
+            elif cached and not cached.get("ok"):
+                status_str = "dead"
+                latency = None
+            else:
+                status_str = "unknown"
+                latency = None
+            results.append({
+                "provider": name,
+                "has_key": bool(env_val),
+                "status": status_str,
+                "model": test_model,
+                "latency_ms": latency,
+                "error": None,
+            })
+
+    if json_output:
+        click.echo(json.dumps(results, indent=2))
+        return
+
+    click.echo("")
+    click.echo(f"  {'Provider':<13} {'Key?':<8} {'Test Model':<30} {'Status':<12} {'Latency':>8}")
+    click.echo("  " + "─" * 75)
+
+    active = dead = no_key = 0
+    for r in results:
+        key_str = (f"✅ {os.getenv(PROVIDERS[r['provider']]['env_var'], '')[:6]}.."
+                   if r["has_key"] else "❌")
+        if r["status"] == "ok":
+            status_icon = "🟢 OK"
+            active += 1
+        elif r["status"] == "dead":
+            status_icon = "🔴 DEAD"
+            dead += 1
+        elif r["status"] == "no_key":
+            status_icon = "⚪ No key"
+            no_key += 1
+        else:
+            status_icon = "🟡 Unknown"
+
+        lat_str = f"{r['latency_ms']:.0f}ms" if r.get("latency_ms") else "-"
+        routes_hint = f"({provider_route_counts.get(r['provider'], 0)} routes)"
+        click.echo(
+            f"  {r['provider']:<13} {key_str:<8} {r['model']:<30} {status_icon:<12} {lat_str:>8}  {routes_hint}"
+        )
+
+    click.echo("")
+    total = len(results)
+    click.secho(f"  Active: {active}/{total} | Dead: {dead}/{total} | Unconfigured: {no_key}/{total}", fg="cyan")
+
+    for r in results:
+        if r["status"] == "dead":
+            click.secho(f"\n⚠️  {r['provider']} appears dead. Run: walkie setup", fg="yellow")
+
+    if not sweep:
+        click.secho("\n  Tip: Run `walkie status --sweep` for a live probe of each provider.", fg="cyan", err=True)
+
 
 if __name__ == '__main__':
     cli()
