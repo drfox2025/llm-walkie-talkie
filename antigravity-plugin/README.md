@@ -5,13 +5,19 @@ LLM Walkie-Talkie (LWT) là một giao diện dòng lệnh bảo mật và tối
 
 Điểm nổi bật của chương trình là khả năng tự động quét các cổng API để phát hiện và báo cáo các mô hình miễn phí đang hoạt động, đồng thời kiểm tra trực tiếp độ trễ kết nối thông qua các gói thăm dò để tự cập nhật bộ nhớ đệm trạng thái hệ thống. Bên cạnh đó, LWT tích hợp một quy trình vòng lặp tự sửa lỗi khép kín, phân chia nhiệm vụ đồng thời cho ba vai trò độc lập gồm mô hình triển khai mã nguồn, mô hình kiểm toán thiết kế giao diện và mô hình kiểm thử tìm lỗi xung đột. Toàn bộ quá trình chạy thử được cô lập hoàn toàn trên một phân nhánh Git Worktree độc lập để tránh ảnh hưởng đến thư mục làm việc hiện tại, đi kèm cơ chế sao lưu tự động ngăn ngừa mất mát dữ liệu trước khi cập nhật mã nguồn làm việc chính.
 
-**Cách sử dụng kết hợp với Gọi Kỹ năng (Skill Calling):**
-1. **Khởi tạo Design Contract**: Chạy `walkie setup` và thiết lập `theme.contract.yaml` trong thư mục gốc.
-2. **Kỹ năng gọi Tự động**: IDE Agent sẽ tự động đọc kỹ năng `llm-loop` (trong `.agents/skills/llm_loop/SKILL.md`) để ủy thác các nhiệm vụ thiết kế giao diện phức tạp. Kỹ năng này hướng dẫn Agent gọi lệnh:
+**Cách sử dụng kết hợp với Gọi Kỹ năng (Skill Calling) & Tiến hóa Mô hình Nội bộ (Internal LLM Evolution):**
+1. **Khởi tạo và Ủy thác Nhiệm vụ qua Kỹ năng (Skills)**: IDE Agent tự động phát hiện và kích hoạt kỹ năng `ai-consult` (trong `.agents/skills/ai_consult/SKILL.md`) để giảm thiểu tiêu thụ token bằng cách ủy thác các tác vụ lập trình phức tạp cho mô hình bên ngoài qua lệnh `walkie consult`. Đối với các nhiệm vụ giao diện phức tạp đòi hỏi kiểm thử liên tục, Agent sẽ dùng kỹ năng `llm-loop` (trong `.agents/skills/llm_loop/SKILL.md`) để thực thi quy trình sửa lỗi tự động:
    ```bash
    walkie loop --goal "Xây dựng nút bấm đăng nhập" --stop-cmd "npm test" --design-contract theme.contract.yaml --session sess_1
    ```
-   Lệnh trên sẽ tự động cô lập dự án, tiến hành vòng lặp tự sửa lỗi và tối ưu cho đến khi stop-cmd thành công và đạt chuẩn chất lượng thiết kế.
+2. **Kích hoạt Tiến hóa Mô hình Nội bộ (Internal LLM Evolution)**: LWT cung cấp cơ chế giúp mô hình IDE Agent nội bộ tự học hỏi và tối ưu hóa hệ thống luật của chính nó (như trong tệp `.agents/AGENTS.md`). Khi Agent phát hiện điểm chưa tối ưu trong quá trình lập luận hoặc giải quyết tác vụ, nó sẽ đóng gói ngữ cảnh thành JSON và gọi lệnh `walkie evolve`:
+   ```bash
+   walkie evolve --context '{"task": "Sửa lỗi đăng nhập", "self_assessment": "Tôi đã tốn nhiều thời gian đọc toàn bộ tệp thay vì sử dụng grep để tìm tuyến đường đăng nhập."}'
+   ```
+   Hệ thống sẽ tự động tham vấn một mô hình chuyên gia lớn hơn để phân tích chuỗi suy nghĩ (CoT), đề xuất quy tắc mới và tự động tiêm quy tắc đó vào phân đoạn chỉ định (ví dụ: `<!-- EVOLVE_SECTION: CODING -->`) trong hệ thống luật của Agent. Bạn hoặc Agent có thể khôi phục lại bất kỳ lúc nào bằng lệnh:
+   ```bash
+   walkie evolve-restore
+   ```
 
 *(English version is below)*
 
