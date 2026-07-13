@@ -1,20 +1,11 @@
 # LLM Walkie-Talkie (IDE Agent Consultation CLI)
 
 ```text
-╔═════════════════════════════════════════════════════════════════════════════╗
-║ ██╗     ██╗     ███╗   ███╗  ██╗    ██╗ █████╗ ██╗     ██╗  ██╗██╗███████╗  ║
-║ ██║     ██║     ████╗ ████║  ██║    ██║██╔══██╗██║     ██║ ██╔╝██║██╔════╝  ║
-║ ██║     ██║     ██╔████╔██║  ██║ █╗ ██║███████║██║     █████╔╝ ██║█████╗    ║
-║ ██║     ██║     ██║╚██╔╝██║  ██║███╗██║██╔══██║██║     ██╔═██╗ ██║██╔══╝    ║
-║ ███████╗███████╗██║ ╚═╝ ██║  ╚███╔███╔╝██║  ██║███████╗██║  ██╗██║███████╗  ║
-║ ╚══════╝╚══════╝╚═╝     ╚═╝   ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝  ║
-║                ████████╗ █████╗ ██╗     ██╗  ██╗██╗███████╗                 ║
-║                ╚══██╔══╝██╔══██╗██║     ██║ ██╔╝██║██╔════╝                 ║
-║                   ██║   ███████║██║     █████╔╝ ██║█████╗                   ║
-║                   ██║   ██╔══██║██║     ██╔═██╗ ██║██╔══╝                   ║
-║                   ██║   ██║  ██║███████╗██║  ██╗██║███████╗                 ║
-║                   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝                 ║
-╚═════════════════════════════════════════════════════════════════════════════╝
+ _      __      __  _______ 
+| |     \ \    / / |__   __|
+| |      \ \  / /     | |   
+| |____   \ \/ /      | |   
+|______|   \__/       |_|   
 ```
 
 LLM Walkie-Talkie is a **secure**, lightweight, and token-efficient CLI tool **fully vibe coded** and specifically designed for the **Antigravity IDE Agent** and terminal users. 
@@ -22,10 +13,6 @@ LLM Walkie-Talkie is a **secure**, lightweight, and token-efficient CLI tool **f
 It allows Antigravity to pass entire codebases, multi-file contexts, base64 multimodal attachments, and conversation logs securely to high-performing external LLM providers (ZenMux, NVIDIA NIM, OpenRouter, Anthropic, OpenAI) with **real-time streaming** and **automated surgical patching**. By offloading 80%+ of code generation and patching to these advanced external models, it dramatically minimizes the token costs of internal Antigravity models while keeping API keys isolated and protected.
 
 
-> [!TIP]
-> **96% Context Token Savings (Native IDE Agent vs External LWT Execution)**
-> 
-> When used inside an IDE Agent (like Antigravity), outsourcing heavy refactoring to walkie consult -L isolates the massive codebase context into a lightweight subprocess. In our benchmarks across 1,271 conversation turns, internal direct execution consumed over **19.2 million prompt tokens** due to compounding history. Delegating the same tasks through LWT reduced the cost to just **~600 external tokens per patch**, netting an incredible **96.2% token savings** and eradicating cognitive context drift.
 
 ---
 
@@ -164,4 +151,28 @@ walkie evolve --context scratch/cot.json -m nvidia/z-ai/glm-5.2
   walkie evolve-restore AGENTS.md.20260713.bak   # Restore specific backup
   ```
 * **Use Case:** Permanently correct bad agent behaviors (such as searching test directories during a standard refactoring task or forgetting to verify imports) on-the-fly.
+
+---
+
+## 🌐 Open VSX Marketplace Publishing Guide
+
+To publish the packaged extension (`llm-walkie-talkie-1.0.0.vsix`) to the Open VSX Registry (used by Antigravity and VSCodium):
+
+### Option A: Command Line Interface (CLI)
+1. **Get an Access Token:**
+   - Sign in to the [Open VSX Registry](https://open-vsx.org/).
+   - Go to your profile settings and generate a Personal Access Token (PAT).
+2. **Claim the Namespace:**
+   - Ensure you have registered the namespace `drfox2025` (matching the `"publisher"` field in `package.json`).
+3. **Publish:**
+   - Execute the following command inside the `antigravity-plugin/` directory:
+     ```bash
+     npx ovsx publish llm-walkie-talkie-1.0.0.vsix -p <YOUR_OPEN_VSX_TOKEN>
+     ```
+
+### Option B: Manual Web Upload
+1. Sign in to the [Open VSX Registry](https://open-vsx.org/).
+2. Navigate to your publisher namespace page.
+3. Click the **Upload Extension** button.
+4. Select the compiled `llm-walkie-talkie-1.0.0.vsix` file from the `antigravity-plugin/` directory and upload it directly.
 
