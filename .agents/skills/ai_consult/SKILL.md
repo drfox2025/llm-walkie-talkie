@@ -118,6 +118,27 @@ walkie setup                       # Configure API keys (includes NVIDIA wizard)
 
 ---
 
+## Native LLM Evolution (Agent Self-Improvement)
+
+The IDE agent can self-modify its customizations (global rules, workspace instructions, etc.) every time it learns something new. This is done by consulting an external LLM to critique its Chain of Thought (CoT) and inject a new, permanent rule.
+
+### Workflow for the Native Agent:
+When you (the agent) execute a complex task and realize you made an inefficiency, or you discover a new optimized workflow:
+1. **Pre-summarize your CoT** into a tight JSON string describing: `{"task": "...", "tools_used": [...], "actions_taken": [...], "final_cot_summary": "...", "self_assessment": "..."}`
+2. **Call `walkie evolve`**:
+   ```bash
+   walkie evolve --context '{"task": "Fix login bug", "self_assessment": "I wasted time reading the whole file instead of grepping for the login route."}'
+   ```
+   *Note: You can also write the JSON to a temporary file in `scratch/` and pass `--context scratch/my_cot.json` to avoid shell escaping issues.*
+3. **Report to User**: Always notify the user that you have updated your rules via `walkie evolve`. Show them the output (the critique and the injected rule).
+
+If a newly injected rule breaks your workflow in a future task, you can always rollback using the backup path provided in the output, or by listing backups:
+```bash
+walkie evolve-restore
+```
+
+---
+
 ## Self-Correcting Features
 
 LWT handles delimiters cleanly. If a patch fails syntax compilation (`python -m py_compile`), fails regex parsing, or fails the auditor verify (`-V`), LWT executes a self-correcting retry loop entirely inside its subprocess, sparing you from wasting any internal context tokens on error logs!

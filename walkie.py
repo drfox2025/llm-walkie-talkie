@@ -1713,6 +1713,98 @@ def status(sweep, json_output):
     if not sweep:
         click.secho("\n  Tip: Run `walkie status --sweep` for a live probe of each provider.", fg="cyan", err=True)
 
+@cli.command("evolve")
+@click.option("--context", required=True, help="JSON string or file path containing the CoT abstract.")
+@click.option("-m", "--model", default="nvidia/z-ai/glm-5.2", help="External LLM to consult.")
+def evolve(context, model):
+    """Consult an external LLM to critique recent CoT and safely inject a new rule."""
+    import evolve as ev
+    from pathlib import Path
+    
+    # Check if context is a file
+    if Path(context).exists():
+        with open(context, "r", encoding="utf-8") as f:
+            cot_text = f.read()
+    else:
+        cot_text = context
+        
+    click.secho("[EVOLVE] Sending CoT abstract to external LLM...", fg="cyan")
+    
+    prompt = f"{ev.ARCHITECT_SYSTEM_PROMPT}\n\n### CoT Abstract\n{cot_text}"
+    try:
+        reply, _ = call_llm(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            no_log=True
+        )
+    except Exception as e:
+        click.secho(f"\n[ERROR] External LLM consultation failed: {e}", fg="red")
+        return
+        
+    try:
+        data = ev.parse_evolution_json(reply)
+    except ValueError as e:
+        click.secho(f"\n[ERROR] {e}", fg="red")
+        return
+        
+    critique = data["critique"]
+    rule = data["suggested_rule"]
+    
+    click.echo(f"\n[CRITIQUE] {critique}")
+    click.echo(f"[SUGGESTED RULE] {rule['content']}")
+    
+    target_file = Path(rule["target_file"])
+    if not target_file.is_absolute():
+        target_file = Path.cwd() / rule["target_file"]
+        
+    if not target_file.exists():
+        click.secho(f"\n[ERROR] Target file {target_file} does not exist.", fg="red")
+        return
+        
+    click.echo(f"\n[BACKUP] Saving backup of {target_file.name}...")
+    try:
+        backup_path = ev.backup_rules(target_file)
+        click.secho(f"Backup saved to: {backup_path}", fg="green")
+    except Exception as e:
+        click.secho(f"[ERROR] Failed to backup: {e}", fg="red")
+        return
+        
+    click.echo("[INJECT] Applying rule...")
+    success, msg = ev.inject_rule(target_file, rule["section_anchor"], rule["content"])
+    
+    if success:
+        click.secho(f"[SUCCESS] Rule injected into {target_file.name} under <!-- EVOLVE_SECTION: {rule['section_anchor'].upper()} -->", fg="green")
+        click.secho(f"If this rule breaks things, you can restore by running:", fg="yellow")
+        click.secho(f"  walkie evolve-restore {backup_path.name}", fg="yellow")
+    else:
+        click.secho(f"[FAIL] {msg}", fg="red")
+
+
+@cli.command("evolve-restore")
+@click.argument("backup_filename", required=False)
+def evolve_restore(backup_filename):
+    """Restore a rule file from a backup."""
+    import evolve as ev
+    from pathlib import Path
+    
+    if not backup_filename:
+        backups = ev.list_backups()
+        if not backups:
+            click.secho("No backups found.", fg="yellow")
+            return
+        click.secho("Available backups:", fg="cyan")
+        for b in backups[:10]:
+            click.echo(f"  {b}")
+        click.echo("\nTo restore, run: walkie evolve-restore <filename>")
+        return
+        
+    target_dir = Path.cwd()
+    try:
+        target_path = ev.restore_rules(backup_filename, target_dir)
+        click.secho(f"[SUCCESS] Restored {target_path.name} from {backup_filename}", fg="green")
+    except Exception as e:
+        click.secho(f"[ERROR] {e}", fg="red")
 
 if __name__ == '__main__':
     cli()

@@ -23,4 +23,4 @@ dependencies = [
 walkie = "walkie:cli"
 
 [tool.setuptools]
-py-modules = ["walkie", "indexer", "discovery"]
+py-modules = ["walkie", "indexer", "discovery", "evolve"]
