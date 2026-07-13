@@ -125,8 +125,43 @@ walkie ask --model nvidia/anthropic/claude-opus-4.8 --prompt "Audit this code" -
 walkie consult walkie.py --task "Add a docstring to the main entry point" --model nvidia/z-ai/glm-5.2
 ```
 
-### Dry-run refactoring:
+### dry-run refactoring:
 Verify matching blocks and inspect compiled changes side-by-side without modifying files on disk:
 ```bash
 walkie consult main.py --task "Refactor login validation" --model zenmux/anthropic/claude-4-fable --dry-run
 ```
+
+---
+
+## 🛠️ Advanced Features & Commands
+
+### 1. Dynamic Model Discovery (`walkie discover`)
+Scans all configured providers (OpenRouter, NVIDIA NIM) to identify available free models on-demand.
+```bash
+walkie discover --coding-only      # List all free coding/reasoning models
+walkie discover --provider nvidia  # List models from a specific provider
+walkie status                      # Status dashboard of all connections
+walkie status --sweep              # Live sweep latency and probe connectivity
+```
+
+* **Use Case:** Instantly query the system to find newly released free-tier models (e.g. `qwen3-coder:free` with 1M context or `laguna-m.1` built by poolside) to connect them as your primary coder.
+
+### 2. Cross-Provider Failover Routing
+LWT groups identical underlying models hosted across different providers. It automatically routes your requests to the best available route:
+* **EWMA Metrics:** Elects routes based on Exponentially Weighted Moving Average (EWMA) latency and reliability (after 5 sample queries).
+* **Automatic Failovers:** If OpenRouter returns `429 RateLimitError` or fails, the routing system instantly falls back to NVIDIA NIM or another provider hosting the model.
+
+### 3. Native LLM Evolution (`walkie evolve` / `walkie evolve-restore`)
+Enables the native IDE agent to self-modify its rulebooks (like `.agents/AGENTS.md`) and improve its behavior over time.
+```bash
+walkie evolve --context scratch/cot.json -m nvidia/z-ai/glm-5.2
+```
+* **The Critique Loop:** You feed a JSON abstract describing a recent task, your actions, and your self-assessment to an advanced external LLM.
+* **Surgical Rule Insertion:** The external LLM returns a machine-readable JSON critique and suggested rule. LWT parses this, saves a timestamped backup of the rule file, and injects the new rule under target HTML comments (e.g., `<!-- EVOLVE_SECTION: CODING -->`).
+* **Rollbacks:** If a rule causes unexpected behavior, instantly restore it:
+  ```bash
+  walkie evolve-restore                          # List all backups
+  walkie evolve-restore AGENTS.md.20260713.bak   # Restore specific backup
+  ```
+* **Use Case:** Permanently correct bad agent behaviors (such as searching test directories during a standard refactoring task or forgetting to verify imports) on-the-fly.
+
