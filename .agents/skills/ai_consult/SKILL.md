@@ -23,13 +23,21 @@ These are the best available models confirmed via `walkie discover --coding-only
 
 **All 3 are FREE** — they require only an `OPENROUTER_API_KEY` (free at https://openrouter.ai/keys).
 
+*(Note: These free models are optimized for single-call 'consult' operations. To run a 'loop', ensure you use 3 distinct model vendors to satisfy the Start Guard)*
+
 **Multi-route bonus**: `qwen3-next-80b-a3b` and `gpt-oss-120b` are also available on BOTH OpenRouter and NVIDIA NIM simultaneously — the failover system will automatically use both.
 
 ---
 
 ## Execution Workflow
 
-### Step 0: Health Check + Model Discovery (Run once per session)
+### Step 0: Design Contract Setup (UI Tasks)
+If the task involves modifying or building user interface (UI) components:
+- Check if `theme.contract.yaml` exists.
+- If it does not exist, force the creation of one, define the semantic color/spacing scales, and obtain user consent before proceeding.
+- All subsequent `walkie consult` calls on UI files must adhere to the design tokens.
+
+### Step 0.5: Health Check + Model Discovery (Run once per session)
 
 Check all provider connections and see all available free models:
 ```bash

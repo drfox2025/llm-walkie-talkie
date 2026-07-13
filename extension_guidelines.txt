@@ -1,0 +1,309 @@
+PROMPT: Implement llm-loop — a goal-driven, multi-LLM, design-governed looping engine
+Context (existing app)
+You are extending an existing Python CLI (walkie.py + indexer.py) that lets a native LLM consult external LLMs for surgical, token-efficient code patching. It already has: route_model (prefix-routing to openai/-compatible endpoints with api_base/key injection), a consult patch engine (indent-safe re-basing, multi-match refusal, self-correction retry, --verify-model auditor), a compact --session store (bounded diffs via SESSION_INJECT_TURNS/SESSION_DIFF_CHAR_CAP), an abstract_lesson/experience store, atomic 0o600 writes, sanitize_path confinement, and safe_error_handler key scrubbing. Reuse these primitives; do not duplicate them.
+Objective
+Add a new skill/function-calling entry llm-loop that takes a user-stated goal and drives an actual convergent loop (not a max-iteration cap with loose safeguarding) in which the native LLM implements/repairs code while ≥2 external LLMs evaluate and adversarially red-team, until success is proven — with mandatory design governance and mandatory token accounting.
+Hard requirements (non-negotiable)
+1. Minimum 3 LLMs, cross-vendor, distinct roles
+Every loop run MUST use at least 3 models: the native LLM + 2 external, and the 3 must span different vendors to prevent self-preference bias (a model favoring its own family's patterns). Enforce this at startup — refuse to run if fewer than 3 distinct-vendor models are configured. Assign non-overlapping roles:
+Implementer (native) — generates/repairs via the existing consult patch engine.
+Auditor (external A) — grades against a rubric, emits structured JSON {violations, score, verdict, reason}.
+Red Team (external B, different vendor) — adversarial critic whose win condition is producing a concrete, reproducible defect (a failing case, an exploit, a measurable a11y/consistency violation), not free-form commentary. Route all three through route_model. Rotate providers so generation, audit, and red-team are never the same vendor.
+2. Executable stop oracle = ground truth (not LLM opinion)
+The loop terminates on a machine-verifiable condition, not the generator's or grader's self-assessment. Accept --stop-cmd (e.g., pytest -q, exit 0 = done) as the authoritative oracle. LLM panel verdicts are advisory/directional only. This prevents reward-hacking where the Implementer games the grader instead of the goal.
+3. Mandatory Design Contract in BOTH skills (consult and llm-loop)
+Both skills MUST, at task start, force the creation of (or load an existing) machine-readable Design Contract before any UI-touching code is written. If none exists and the task involves UI, the agent must generate one and get it accepted before proceeding. The contract is the UI equivalent of --stop-cmd: a persistent oracle every iteration reads from and is graded against.
+Contract format (theme.contract.yaml / design.lock.json) — encode design tokens, not prose, because prose guidelines drift while tokens don't. Modern UI style guides increasingly rely on design tokens and variables to keep design and code in sync 
+. Include:
+Tokens: semantic color palette, spacing scale, type scale, radius, shadow, breakpoints, z-index layers.
+Component canon: the single approved definition per primitive (Button, Input, Modal, etc.) with variants and all interaction states — button states must be defined once and enforced across every surface 
+.
+Composition/interaction rules and a framework/styling lock (so iteration 3 doesn't switch Tailwind → CSS modules).
+4. The design goal is CONFORMANCE, not cloning — verify units follow the guide
+Critical semantic: the loop verifies that each implemented unit follows the design language, NOT that all units are literally identical. A button with different content must be designed similarly (same tokens, same state model, same interaction pattern) — consistency means buttons, colors, typography, spacing, and interactions follow the same patterns so users build reliable mental models 
+, while content legitimately varies. When these rules are enforced at the component level, consistency propagates everywhere instead of being a per-page checklist 
+. Grade each unit against the contract's rules, allowing content/data variance; flag only deviations in approach (off-token values, bespoke re-implementations of a canonical component, divergent state handling). Consistency requires an active enforcement process — even with a standard in place, people reinterpret ambiguous parts and forget rarely-used elements 
+, so enforcement must be automated, not trusted to the model's memory.
+5. Sandbox-first execution (prioritized)
+Prioritize running every iteration inside an isolated sandbox (git worktree or ephemeral container) so a bad iteration breaks a copy, never main. All code execution, --stop-cmd runs, builds, and rendering happen in the sandbox. Commit each accepted iteration for rollback to last-good state. Gate any escape from the sandbox (shell exec, deletions, out-of-scope writes) behind the existing sanitize_path confinement and human approval.
+6. Mandatory token-usage report (transparency)
+After every loop finishes (success, budget-stop, or stuck), the tool MUST compute and print a token-usage + cost report — this is a hard requirement, not optional. Accumulate usage_data (prompt/completion/total tokens) per model and per role across all iterations, multiply by per-model price to estimate cost, and emit both human-readable and --json-output forms. Include: total iterations, tokens per model, tokens per role (Implementer/Auditor/Red Team), estimated USD, and per-iteration breakdown. Persist the report to the session log.
+Loop state machine (implement exactly this)
+
+
+INIT   verify ≥3 distinct-vendor models; load/create Design Contract;
+       create sandbox (worktree/container); reset token accumulator.
+LOOP:
+ 1. OBSERVE   run --stop-cmd in sandbox. exit 0 AND design gates green → STOP:SUCCESS.
+              else capture failure output.
+ 2. RED TEAM  external B attacks current impl → must output a REPRODUCIBLE defect
+              (root cause + attack/failing case). Score it on whether the defect
+              actually reproduces.
+ 3. ACT       native Implementer repairs via existing consult patch engine,
+              BOUND to the in-scope slice of the Design Contract (inject only the
+              relevant tokens/component canon, not the whole contract — token discipline).
+ 4. GATES     deterministic, authoritative:
+                - token-lint: any color/spacing/radius literal NOT in contract → FAIL
+                - component-usage (AST via indexer.py): canonical component used, not ad-hoc
+                - a11y: automated contrast/focus/tap-target checks
+                - visual-regression: render + screenshot diff vs last accepted state;
+                  optionally feed screenshot to a multimodal external model via the
+                  existing ask() image_url support for rendered-output grading
+                - re-run --stop-cmd
+              any hard fail → REPAIR (feed structured violations back).
+ 5. PANEL     advisory: Auditor rubric {violations, score, verdict};
+              Red Team defect verdict. Structured JSON only — no free chat.
+ 6. DECIDE    stop-cmd pass + gates green + panel stable/improving + red-team finds
+                 no reproducible defect            → STOP:SUCCESS
+              measurable progress (score↑ / fewer failures) → CONTINUE
+              no progress (identical diff hash / flat score / oscillation ≥2) → STOP:STUCK
+              --max-iterations OR --cost-cap-usd hit → STOP:BUDGET
+ 7. PERSIST   append {iteration, redteam_defect, diff, gate_results, panel_verdict,
+              tokens} to --session (compact diffs + verdicts only, never full transcript).
+FINISH  emit MANDATORY token/cost report (per-model, per-role, per-iteration) +
+        outcome summary; on success, surface diff for human merge approval.
+Anti-drift/anti-thrash guards (all HARD gates, not warnings): distinct-vendor enforcement; --max-iterations AND --cost-cap-usd dual cap (cost cap is the one that actually protects users — a 3-role loop is ≥3 external calls/iteration); diff-hash oscillation detector; per-iteration wall-clock timeout (extend the 45s call_llm timeout); immutable audit trail.
+Native evolution of the Design Contract (in-loop)
+The contract must evolve within the loop, but deliberately and validated:
+Compliance is enforced every iteration (deterministic gates).
+Amendments (adding a missing token/state, e.g., an undefined "danger" state) are proposed by the panel as a first-class, logged mutation, and require cross-vendor consensus (≥2 of 3) plus passing a schema/constraint validator before acceptance. A single drifting model must NOT be able to redefine the theme to excuse a lazy implementation.
+Persist accepted amendments as versioned entries in the existing abstract_lesson/experience store (e.g., "UI lesson: danger states must define hover+focus") so design knowledge compounds across runs.
+CLI surface (proposed)
+
+
+walkie loop \
+  --goal "<task>" \
+  --stop-cmd "pytest -q" \              # authoritative oracle
+  --design-contract theme.contract.yaml \  # mandatory for UI tasks
+  --gen-model  gemini/... \             # native Implementer
+  --audit-model nvidia/deepseek-... \   # external Auditor (different vendor)
+  --redteam-model zenmux/... \          # external Red Team (different vendor)
+  --ui-gates "token-lint,axe,component-usage,visual-diff" \
+  --sandbox worktree \                  # sandbox-first
+  --max-iterations 12 --cost-cap-usd 0.50 \
+  --session <id> [--json-output]
+Expose the same as a function-calling skill (llm-loop) with a SKILL.md that (a) instructs the native agent to establish the Design Contract first, (b) enforces the ≥3-distinct-vendor rule, (c) prioritizes sandbox execution, and (d) states that the token report is mandatory output.
+Deliverables / acceptance criteria
+walkie loop command + llm-loop skill, wired to existing route_model, consult patch engine, and --session.
+theme.contract.yaml schema + a deterministic token-lint gate operating on patch/diff output.
+Component-usage AST check built on indexer.py's symbol map.
+Sandbox (worktree) isolation with per-iteration commit + rollback.
+Startup guard rejecting <3 distinct-vendor models.
+Oscillation/progress detector (diff-hash + score-plateau).
+Dual budget cap (iterations + USD cost).
+Mandatory token/cost report (per-model, per-role, per-iteration; human + JSON), persisted to session.
+Contract-amendment path gated by cross-vendor consensus + schema validation, persisted to the experience store.
+Tests: loop convergence on a passing --stop-cmd; token-lint rejects an off-token literal; component-usage rejects an ad-hoc re-implementation; consistency check passes two same-token buttons with different content but fails a divergent-approach button 
+; oscillation detector triggers STOP:STUCK; token report totals equal the sum of per-iteration usage.
+Guiding principle: deterministic gates (stop-cmd, token-lint, a11y, visual-diff) decide PASS/FAIL and are ground truth; the cross-vendor 3-LLM panel decides direction and proposes consensus-gated contract amendments. The design objective is conformance to a shared, evolving contract — buttons designed similarly regardless of content, not literal uniformity 
+. Every run ends with a mandatory, transparent token/cost report.
+
+====
+
+1. theme.contract.yaml — the design oracle schema
+Tokens, component canon, and enforcement config in one machine-readable artifact. Everything the gate needs is here; nothing is prose-only.
+yaml
+
+
+# theme.contract.yaml — Design Contract v1
+# The UI equivalent of --stop-cmd. Every iteration reads from and is graded against this.
+meta:
+  version: 1              # bumped on accepted amendments
+  framework: "react"      # locked; iterations may not switch
+  styling: "tailwind"     # locked styling method
+  amended_by: []          # audit trail of consensus amendments
+
+# --- TOKENS: the only legal literal values in the codebase ---
+tokens:
+  color:
+    # semantic name -> hex. Off-list hex literals in a diff = HARD FAIL.
+    bg.default:     "#ffffff"
+    bg.subtle:      "#f5f5f5"
+    fg.default:     "#111827"
+    fg.muted:       "#6b7280"
+    brand.primary:  "#2563eb"
+    danger.default: "#dc2626"
+    success.default:"#16a34a"
+    border.default: "#e5e7eb"
+  spacing:          [0, 4, 8, 12, 16, 24, 32, 48, 64]   # px; any other margin/padding literal = FAIL
+  radius:           [0, 4, 8, 12, 9999]                  # px
+  font_size:        [12, 14, 16, 18, 20, 24, 30, 36]     # px
+  font_weight:      [400, 500, 600, 700]
+  shadow:
+    sm: "0 1px 2px rgba(0,0,0,0.05)"
+    md: "0 4px 6px rgba(0,0,0,0.1)"
+  z_index:          {base: 0, dropdown: 1000, modal: 1300, toast: 1500}
+  breakpoint:       {sm: 640, md: 768, lg: 1024, xl: 1280}
+
+# --- COMPONENT CANON: the single approved way to build each primitive ---
+# Enforces "designed similarly regardless of content" — content varies, approach does not.
+components:
+  Button:
+    import: "@/components/ui/Button"     # canonical source; raw <button> styled ad-hoc = FAIL
+    variants: [primary, secondary, danger, ghost]
+    sizes:    [sm, md, lg]
+    # ALL interaction states must be defined — missing state = amendment required, not silent
+    required_states: [default, hover, focus, active, disabled, loading]
+    a11y:
+      min_tap_target_px: 44
+      focus_visible: true
+  Input:
+    import: "@/components/ui/Input"
+    variants: [text, error]
+    required_states: [default, focus, error, disabled]
+    a11y: {associated_label: true}
+  Modal:
+    import: "@/components/ui/Modal"
+    required_states: [open, closed]
+    a11y: {focus_trap: true, esc_closes: true, restores_focus: true}
+
+# --- COMPOSITION / INTERACTION RULES ---
+rules:
+  layout: {grid: 12, gutter: 24, max_content_width: 1280}
+  interaction:
+    errors_surface_via: "inline + toast"   # not alert()
+    loading_pattern: "skeleton"            # not spinner-only
+  a11y:
+    min_contrast_normal: 4.5   # WCAG AA
+    min_contrast_large:  3.0
+
+# --- ENFORCEMENT: what the deterministic gates check ---
+enforcement:
+  token_lint:
+    fail_on_offlist_color: true
+    fail_on_offlist_spacing: true
+    fail_on_offlist_radius: true
+    # files the gate scans (raw hex outside these is allowed, e.g. the token def file itself)
+    scan_globs: ["src/**/*.tsx", "src/**/*.ts", "src/**/*.css"]
+    allow_files: ["src/theme/tokens.ts", "theme.contract.yaml"]  # source-of-truth files exempt
+  component_usage:
+    forbid_raw: ["button", "input", "dialog"]   # must use canonical component instead
+  amendment:
+    require_consensus: 2   # of 3 cross-vendor models
+Two design choices worth calling out: (1) allow_files exempts the token-definition source itself, so declaring brand.primary: "#2563eb" in one canonical place isn't flagged — only usages of raw literals elsewhere fail. (2) required_states is what turns "buttons should look consistent" into an enforceable check: a button with different content still must declare the same state set, which is exactly your "designed similarly, not identically" requirement.
+2. token_lint.py — the deterministic gate (ground truth)
+This is authoritative PASS/FAIL, not LLM opinion. It scans the patch diff (so it only judges what the current iteration changed — token-efficient and precise) and returns structured violations the Implementer consumes.
+python
+
+
+"""token_lint.py — deterministic Design Contract enforcement gate.
+
+Ground-truth PASS/FAIL for the llm-loop UI gates. Operates on the diff/patched
+content so only the current iteration's changes are judged. Structured output
+feeds back into the consult repair prompt. LLM panel verdicts stay advisory.
+"""
+import re
+import fnmatch
+from pathlib import Path
+from typing import List, Dict, Any
+
+import yaml  # add to pyproject/requirements
+
+
+# --- literal detectors (only used-value contexts, not token source files) ---
+HEX_RE      = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+# px literals in CSS/JSX: margin/padding/gap/radius/font-size assignments
+PX_RE       = re.compile(r"(?<![\w-])(-?\d+(?:\.\d+)?)px\b")
+# raw HTML element usage in JSX (forbidden primitives)
+RAW_EL_RE   = lambda tag: re.compile(rf"<\s*{tag}(\s|>|/)")
+
+
+def load_contract(path: str) -> Dict[str, Any]:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Design Contract not found: {path}")
+    return yaml.safe_load(p.read_text(encoding="utf-8"))
+
+
+def _file_exempt(file_path: str, contract: Dict[str, Any]) -> bool:
+    allow = contract.get("enforcement", {}).get("token_lint", {}).get("allow_files", [])
+    return any(fnmatch.fnmatch(file_path, g) or file_path.endswith(a)
+               for g in allow for a in [g])  # allow entries treated as suffix/glob
+
+
+def _in_scope(file_path: str, contract: Dict[str, Any]) -> bool:
+    globs = contract.get("enforcement", {}).get("token_lint", {}).get("scan_globs", ["**/*"])
+    return any(fnmatch.fnmatch(file_path, g) for g in globs)
+
+
+def lint_content(file_path: str, content: str, contract: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return a list of structured violations for one file's (patched) content."""
+    tl = contract.get("enforcement", {}).get("token_lint", {})
+    if _file_exempt(file_path, contract) or not _in_scope(file_path, contract):
+        return []
+
+    tokens   = contract.get("tokens", {})
+    colors   = {v.lower() for v in tokens.get("color", {}).values()}
+    spacing  = set(tokens.get("spacing", []))
+    radius   = set(tokens.get("radius", []))
+    fsizes   = set(tokens.get("font_size", []))
+    forbid   = contract.get("enforcement", {}).get("component_usage", {}).get("forbid_raw", [])
+
+    violations: List[Dict[str, Any]] = []
+    for i, line in enumerate(content.splitlines(), start=1):
+        # 1) off-token colors
+        if tl.get("fail_on_offlist_color", True):
+            for m in HEX_RE.finditer(line):
+                if m.group(0).lower() not in colors:
+                    violations.append(_v(file_path, i, "color", m.group(0),
+                                         "Off-token color literal. Use a semantic token."))
+        # 2) off-token px (spacing/radius/font). Allow any px that matches ANY numeric scale.
+        legal_px = spacing | radius | fsizes
+        if tl.get("fail_on_offlist_spacing", True):
+            for m in PX_RE.finditer(line):
+                try:
+                    val = int(float(m.group(1)))
+                except ValueError:
+                    continue
+                if val not in legal_px:
+                    violations.append(_v(file_path, i, "spacing", m.group(0),
+                                         f"Off-scale px value {val}. Use a token from the scale."))
+        # 3) forbidden raw elements (must use canonical component)
+        for tag in forbid:
+            if RAW_EL_RE(tag).search(line):
+                violations.append(_v(file_path, i, "component", f"<{tag}>",
+                                     f"Raw <{tag}> forbidden. Use the canonical component."))
+    return violations
+
+
+def _v(file, line, kind, found, msg):
+    return {"file": file, "line": line, "type": kind, "found": found, "message": msg}
+
+
+def run_gate(patched_files: Dict[str, str], contract_path: str) -> Dict[str, Any]:
+    """patched_files: {path: full_content_after_patch}. Returns gate verdict."""
+    contract = load_contract(contract_path)
+    all_v: List[Dict[str, Any]] = []
+    for fpath, content in patched_files.items():
+        all_v.extend(lint_content(fpath, content, contract))
+
+    passed = len(all_v) == 0
+    return {
+        "gate": "token-lint",
+        "passed": passed,
+        "violation_count": len(all_v),
+        "violations": all_v,
+        # compact, ready to inject into the consult repair prompt
+        "feedback": "" if passed else "\n".join(
+            f"[{v['type']}] {v['file']}:{v['line']} — {v['found']}: {v['message']}"
+            for v in all_v
+        ),
+    }
+How it wires into your loop's GATES step:
+python
+
+
+# inside the llm-loop DECIDE/GATES stage, in the sandbox, after applying patches
+from token_lint import run_gate
+
+result = run_gate(patched_files, contract_path)
+if not result["passed"]:
+    # HARD FAIL → feed structured feedback back to the Implementer (consult repair)
+    error_feedback = (
+        "Design Contract violations (token-lint). Fix ALL before proceeding:\n"
+        + result["feedback"]
+    )
+    # → next consult iteration receives error_feedback, same mechanism as patch retry
+    verdict = "REPAIR"
+else:
+    verdict = "GATE_PASS"  # proceed to a11y / component-usage / visual-diff / stop-cmd

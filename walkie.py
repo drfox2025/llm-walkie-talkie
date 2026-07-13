@@ -1,3 +1,4 @@
+
 import os
 import sys
 import json
@@ -27,11 +28,11 @@ SESSION_MAX_TURNS = 20          # hard cap stored on disk
 SESSION_INJECT_TURNS = 6        # how many recent turns to inject into prompt
 SESSION_DIFF_CHAR_CAP = 400     # reuse your chain-diff cap
 
-def _session_path(session_id: str):
+def _session_path(session_id: str) -> Path:
     safe = re.sub(r'[^\w.\-]+', '-', session_id)[:80]
     return SESSION_DIR / f"{safe}.json"
 
-def load_session(session_id: str):
+def load_session(session_id: str) -> Optional[Dict[str, Any]]:
     p = _session_path(session_id)
     if not p.exists():
         return None
@@ -49,8 +50,8 @@ def save_session(session_id: str, data: dict) -> None:
         if 'turns' in data:
             data['turns'] = data['turns'][-SESSION_MAX_TURNS:]
         if 'messages' in data:
-            # Note: SESSION_MAX_TURNS represents individual message entries here, 
-            # so an exchange (user+assistant) consumes 2 turns. This means 
+            # Note: SESSION_MAX_TURNS represents individual message entries here,
+            # so an exchange (user+assistant) consumes 2 turns. This means
             # a cap of 20 equates to ~10 conversational exchanges.
             if data['messages'] and data['messages'][0].get('role') == 'system':
                 data['messages'] = [data['messages'][0]] + data['messages'][-(SESSION_MAX_TURNS-1):]
@@ -178,7 +179,14 @@ PROVIDER_CONFIG = {
 @click.group()
 def cli():
     """LLM Walkie-Talkie: Consult external LLMs from your IDE."""
-    pass
+    active_provs = []
+    for provider, info in PROVIDERS.items():
+        if os.getenv(info["env_var"]):
+            active_provs.append(provider)
+    if active_provs:
+        click.secho(f"[WARM START] Identified active providers: {', '.join(active_provs)}", fg="green", err=True)
+    else:
+        click.secho("[WARM START] No active providers identified. Please run `walkie setup`.", fg="yellow", err=True)
 
 
 def health_ok(model: str, ttl=3600):
@@ -211,7 +219,7 @@ def health(model):
     if health_ok(model, 3600):
         click.secho("[OK] Connection cached (fresh).", fg="green")
         sys.exit(0)
-    
+
     # Needs real probe
     try:
         call_llm(model=model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, no_log=True)
@@ -323,14 +331,14 @@ def _strip_comments(code: str, file_ext: str) -> str:
     Preserves string literals to prevent accidental code removal.
     """
     file_ext = file_ext.lower().lstrip(".")
-    
+
     # Define comment syntax per language family
     single_line_tokens = []
     multi_line_pairs = []
-    
+
     if file_ext in ("py", "dockerfile", "sh", "bash", "zsh", "r", "makefile", "cmake", "rb"):
         single_line_tokens.append("#")
-    elif file_ext in ("js", "ts", "tsx", "jsx", "java", "c", "cc", "cpp", "cxx", "h", 
+    elif file_ext in ("js", "ts", "tsx", "jsx", "java", "c", "cc", "cpp", "cxx", "h",
                       "hpp", "hxx", "cs", "go", "rs", "swift", "kt", "scala", "php", "css", "less", "scss"):
         single_line_tokens.extend(["//"])
         multi_line_pairs.append(("/*", "*/"))
@@ -351,7 +359,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
         multi_line_pairs.append(("/*", "*/"))
     else:
         return code
-    
+
     # Simple state machine to protect string literals
     result: List[str] = []
     i = 0
@@ -359,7 +367,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
     in_single_str = None
     in_line_comment = False
     in_block_comment = False
-    
+
     while i < n:
         if in_line_comment:
             if code[i] == "\n":
@@ -367,7 +375,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
                 in_line_comment = False
             i += 1
             continue
-        
+
         if in_block_comment:
             for end_token in [p[1] for p in multi_line_pairs]:
                 if code.startswith(end_token, i):
@@ -377,7 +385,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
             else:
                 i += 1
             continue
-        
+
         if file_ext == "py" and not in_single_str:
             matched_triple = False
             for triple in ['"""', "'''"]:
@@ -395,7 +403,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
                 continue
             if i >= n:
                 continue
-        
+
         if not in_single_str:
             matched_block = False
             for start_token, end_token in multi_line_pairs:
@@ -406,7 +414,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
                     break
             if matched_block:
                 continue
-            
+
             matched_line = False
             for token in single_line_tokens:
                 if code.startswith(token, i):
@@ -416,7 +424,7 @@ def _strip_comments(code: str, file_ext: str) -> str:
                     break
             if matched_line:
                 continue
-        
+
         if not in_single_str and code[i] in ('"', "'"):
             in_single_str = code[i]
         elif in_single_str and code[i] == in_single_str:
@@ -428,10 +436,10 @@ def _strip_comments(code: str, file_ext: str) -> str:
                 j -= 1
             if backslash_count % 2 == 0:
                 in_single_str = None
-        
+
         result.append(code[i])
         i += 1
-    
+
     # Strip trailing whitespaces and remove excessive empty lines
     lines = [line.rstrip() for line in "".join(result).splitlines()]
     non_empty_lines = []
@@ -657,16 +665,19 @@ def route_model(model: str) -> Tuple[str, Optional[str], Optional[str]]:
         prefix = f"{provider.lower()}/"
         if model.startswith(prefix):
             env_var = info["env_var"]
+            if provider == "NVIDIA" and "deepseek" in model.lower():
+                api_key = os.getenv("NVIDIA_DEEPSEEK_API_KEY") or os.getenv(env_var)
+            else:
+                api_key = os.getenv(env_var)
+
+            if not api_key:
+                raise ValueError(f"Provider {provider} is not configured. Please set {env_var} environment variable or run `walkie setup`.")
+
             if info.get("api_base"):
                 routed_model = "openai/" + model.split("/", 1)[1]
                 api_base = info.get("api_base")
             else:
                 routed_model = model
-            
-            if provider == "NVIDIA" and "deepseek" in routed_model.lower():
-                api_key = os.getenv("NVIDIA_DEEPSEEK_API_KEY") or os.getenv(env_var)
-            else:
-                api_key = os.getenv(env_var)
             break
 
     return routed_model, api_base, api_key
@@ -832,7 +843,7 @@ def log_interaction(
             f.write(f"# Walkie-Talkie Log\n\n")
             f.write(f"**Date:** {timestamp}\n")
             f.write(f"**Model:** {model}\n\n")
-            
+
             # Determine dynamic fence length to avoid breaking markdown code blocks if contents contain backticks
             contents_combined = full_prompt + "\n" + (system or "") + "\n" + reply
             max_backticks = 0
@@ -882,7 +893,7 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
     messages = []
     if system and not history:
         messages.append({"role": "system", "content": system})
-    
+
     messages.extend(history)
 
     if images_list:
@@ -978,7 +989,7 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
             sd = session_data or {"id": session, "created": datetime.datetime.now().isoformat(), "messages": []}
             if system and not sd["messages"]:
                 sd["messages"].append({"role": "system", "content": system})
-            
+
             # Save only the raw text prompt (no point-in-time attachments/images) to prevent ballooning context
             sd["messages"].append({"role": "user", "content": raw_prompt})
             sd["messages"].append({"role": "assistant", "content": reply})
@@ -1026,7 +1037,7 @@ def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, d
     kwargs = {"model": routed, "messages": messages, "timeout": opts.get("timeout", float(os.environ.get("WALKIE_TIMEOUT", 120.0)))}
     if api_base: kwargs["api_base"] = api_base
     if api_key: kwargs["api_key"] = api_key
-    for k in ("max_tokens", "temperature", "top_p", "stream", "extra_body"):
+    for k in ("max_tokens", "temperature", "top_p", "stream", "extra_body", "response_format"):
         if opts.get(k) is not None:
             kwargs[k] = opts[k]
     try:
@@ -1065,16 +1076,16 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
             orig_lines = [line.strip().replace("\t", " ") for line in orig.splitlines() if line.strip()]
             working_lines = working.splitlines()
             matched_starts = []
-            
+
             for idx in range(len(working_lines) - len(orig_lines) + 1):
                 window = [working_lines[idx+i].strip().replace("\t", " ") for i in range(len(orig_lines))]
                 if window == orig_lines:
                     matched_starts.append(idx)
-            
+
             if matched_starts:
                 if len(matched_starts) > 1:
                     return working, f"Ambiguous patch block: normalized original block matches {len(matched_starts)} times. Please provide more context."
-                
+
                 matched_start = matched_starts[0]
                 candidate_lines = working_lines[matched_start : matched_start + len(orig_lines)]
                 candidate = "\n".join(candidate_lines)
@@ -1083,7 +1094,7 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
                     leading_ws = ""
                     if candidate_lines:
                         leading_ws = candidate_lines[0][:len(candidate_lines[0]) - len(candidate_lines[0].lstrip())]
-                    
+
                     rep_lines = rep.splitlines()
                     if rep_lines:
                         non_blank = [line for line in rep_lines if line.strip()]
@@ -1091,7 +1102,7 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
                             rep_leading_ws = min((line[:len(line) - len(line.lstrip())] for line in non_blank), key=len)
                         else:
                             rep_leading_ws = ""
-                            
+
                         adjusted_rep_lines = []
                         for r_line in rep_lines:
                             if r_line.strip() == "":
@@ -1101,7 +1112,7 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
                             else:
                                 adjusted_rep_lines.append(leading_ws + r_line.lstrip())
                         rep = "\n".join(adjusted_rep_lines)
-                    
+
                     working = working.replace(candidate, rep, 1)
                     continue
         return working, f"Original block not found:\n```\n{orig}\n```"
@@ -1177,7 +1188,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             "Do not add new imports or redeclare classes/functions that are defined globally. Focus ONLY on modifying this segment in place. "
             "Assume all global imports and variables are already available."
         )
-    
+
     if not no_context_packet:
         try:
             import indexer
@@ -1192,13 +1203,13 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
     if not no_experience:
         system_prompt += load_experience_prompt(file_ext)
 
-    if session and (attach or images_list):
+    if session and attach:
         click.secho("Notice: Attachments are point-in-time context and will not be saved into the session history.", fg="cyan", err=True)
 
     session_data = load_session(session) if session else None
 
     base_user_prompt = f"Task: {task}\n\nTarget File: {s_file}\n"
-    
+
     if session_data:
         turns = session_data.get('turns', [])[-SESSION_INJECT_TURNS:]
         if turns:
@@ -1252,7 +1263,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
                 start_idx = max(0, start_line - 1 - 5)
                 end_idx = min(len(w_lines), end_line + 5)
                 current_segment = "\n".join(w_lines[start_idx:end_idx])
-            
+
             user_prompt = f"Task: {task}\n\nTarget File (Current state after prior chain steps):\n"
             if line_range:
                 user_prompt += f"Target Line Range: {start_line}-{end_line}\n"
@@ -1276,7 +1287,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             try:
                 reply, usage = call_llm(chain_m, messages)
                 usage_by_model[f"{chain_m}#step{step_idx}_attempt{attempt}"] = usage
-                
+
                 # Log the interaction
                 json_path, md_path = log_interaction(
                     model=chain_m,
@@ -1313,7 +1324,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
                     start_idx = max(0, start_line - 1 - 5)
                     end_idx = min(len(w_lines), end_line + 5)
                     segment_content = "\n".join(w_lines[start_idx:end_idx])
-                    
+
                     candidate_segment, err = apply_patches(segment_content, patches)
                     if err:
                         error_feedback = err
@@ -1376,7 +1387,7 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
         verify_system = "You are an independent, strict code auditor. Review patches for correctness and hallucinations.\n"
         if line_range:
             verify_system += f"NOTE: Patch targets localized lines {start_line}-{end_line} of {Path(s_file).name}.\n"
-        
+
         verify_prompt = f"Task: {task}\nTarget: {Path(s_file).name}\nProposed Changes:\n"
         for idx, (orig, rep) in enumerate(final_patches, 1):
             verify_prompt += f"Block #{idx}:\nOriginal:\n```\n{orig}\n```\nReplacement:\n```\n{rep}\n```\n"
@@ -1384,26 +1395,26 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             "\nRespond strictly in JSON format matching this schema:\n"
             "{\n  \"verdict\": \"PASS\" or \"FAIL\",\n  \"reason\": \"Description of issues if FAIL, or empty string if PASS\"\n}\n"
         )
-        
+
         try:
             reply_verify, v_usage = call_llm(verify_model, [
                 {"role": "system", "content": verify_system},
                 {"role": "user", "content": verify_prompt}
             ], max_tokens=500)
             usage_by_model[f"{verify_model}#verify"] = v_usage
-            
+
             # JSON Parse verification
             json_content = reply_verify
             if "```json" in json_content:
                 json_content = json_content.split("```json", 1)[1].split("```", 1)[0]
             elif "```" in json_content:
                 json_content = json_content.split("```", 1)[1].split("```", 1)[0]
-            
+
             import json as json_lib
             verify_data = json_lib.loads(json_content.strip())
             verdict = verify_data.get("verdict", "").strip().upper()
             reason = verify_data.get("reason", "").strip()
-            
+
             if verdict == "FAIL":
                 error_feedback = f"Auditor Review Failed (Hallucination Check): {reason}"
                 click.secho(f"Auditor flagged failure: {reason}", fg="red", err=True)
@@ -1414,6 +1425,13 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
 
     if error_feedback:
         click.secho(f"Validation loop flagged critical failure: {error_feedback}", fg="red", err=True)
+        if not no_experience:
+            try:
+                lesson = abstract_lesson(error_feedback, 3, file_ext)
+                if lesson:
+                    save_experience(file_ext, lesson)
+            except Exception:
+                pass
         sys.exit(1)
 
     total_replacements = len(final_patches)
@@ -1452,10 +1470,10 @@ def map(output, exclude):
     except ImportError as e:
         click.secho(f"Missing dependency: {str(e)}", fg="red", err=True)
         sys.exit(1)
-        
+
     click.secho("Scanning workspace and updating symbols index...", fg="yellow", err=True)
     idx = indexer.build_or_update_symbols_index(Path.cwd(), force_walk=True)
-    
+
     # Project indexer data to legacy map format
     root_path = Path.cwd()
     project_map = {
@@ -1466,7 +1484,7 @@ def map(output, exclude):
         "dependencies": [],
         "mermaid_dependencies": ""
     }
-    
+
     files = idx.get('files', {})
     for rel_path, data in files.items():
         if data.get('language') == 'python':
@@ -1475,20 +1493,20 @@ def map(output, exclude):
                 "functions": data.get('functions', [])
             }
             project_map["directory_structure"].append(rel_path)
-    
+
     # Simple mermaid graph from reverse_deps
     mermaid_lines = ["graph TD"]
     has_edges = False
     reverse_deps = idx.get('reverse_deps', {})
     modules_list = [Path(p).stem for p in files.keys()]
-    
+
     for mod, importers in reverse_deps.items():
         for imp_file in importers:
             imp_stem = Path(imp_file).stem
             if mod in modules_list and mod != imp_stem:
                 mermaid_lines.append(f"    {imp_stem} --> {mod}")
                 has_edges = True
-                
+
     if has_edges:
         project_map["mermaid_dependencies"] = "\n".join(mermaid_lines)
     else:
@@ -1636,6 +1654,30 @@ def status(sweep, json_output):
     if sweep:
         click.secho("[WAIT] Running live probes (this may take ~30s)...", fg="yellow", err=True)
         results = disc.sweep_configured_providers(_probe)
+        try:
+            p = CONFIG_DIR / "health.json"
+            health_cache = {}
+            if p.exists():
+                try:
+                    health_cache = json.loads(p.read_text()).get("models", {})
+                except Exception:
+                    pass
+            for res in results:
+                health_cache[res["model"]] = {
+                    "ok": res["status"] == "ok",
+                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+                }
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            fd = os.open(str(p), os.O_CREAT | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({"models": health_cache}, f)
+        except Exception:
+            pass
     else:
         # Use cached health data
         health_cache = {}
@@ -1720,16 +1762,16 @@ def evolve(context, model):
     """Consult an external LLM to critique recent CoT and safely inject a new rule."""
     import evolve as ev
     from pathlib import Path
-    
+
     # Check if context is a file
     if Path(context).exists():
         with open(context, "r", encoding="utf-8") as f:
             cot_text = f.read()
     else:
         cot_text = context
-        
+
     click.secho("[EVOLVE] Sending CoT abstract to external LLM...", fg="cyan")
-    
+
     prompt = f"{ev.ARCHITECT_SYSTEM_PROMPT}\n\n### CoT Abstract\n{cot_text}"
     try:
         reply, _ = call_llm(
@@ -1741,27 +1783,27 @@ def evolve(context, model):
     except Exception as e:
         click.secho(f"\n[ERROR] External LLM consultation failed: {e}", fg="red")
         return
-        
+
     try:
         data = ev.parse_evolution_json(reply)
     except ValueError as e:
         click.secho(f"\n[ERROR] {e}", fg="red")
         return
-        
+
     critique = data["critique"]
     rule = data["suggested_rule"]
-    
+
     click.echo(f"\n[CRITIQUE] {critique}")
     click.echo(f"[SUGGESTED RULE] {rule['content']}")
-    
+
     target_file = Path(rule["target_file"])
     if not target_file.is_absolute():
         target_file = Path.cwd() / rule["target_file"]
-        
+
     if not target_file.exists():
         click.secho(f"\n[ERROR] Target file {target_file} does not exist.", fg="red")
         return
-        
+
     click.echo(f"\n[BACKUP] Saving backup of {target_file.name}...")
     try:
         backup_path = ev.backup_rules(target_file)
@@ -1769,10 +1811,10 @@ def evolve(context, model):
     except Exception as e:
         click.secho(f"[ERROR] Failed to backup: {e}", fg="red")
         return
-        
+
     click.echo("[INJECT] Applying rule...")
     success, msg = ev.inject_rule(target_file, rule["section_anchor"], rule["content"])
-    
+
     if success:
         click.secho(f"[SUCCESS] Rule injected into {target_file.name} under <!-- EVOLVE_SECTION: {rule['section_anchor'].upper()} -->", fg="green")
         click.secho(f"If this rule breaks things, you can restore by running:", fg="yellow")
@@ -1787,7 +1829,7 @@ def evolve_restore(backup_filename):
     """Restore a rule file from a backup."""
     import evolve as ev
     from pathlib import Path
-    
+
     if not backup_filename:
         backups = ev.list_backups()
         if not backups:
@@ -1798,7 +1840,7 @@ def evolve_restore(backup_filename):
             click.echo(f"  {b}")
         click.echo("\nTo restore, run: walkie evolve-restore <filename>")
         return
-        
+
     target_dir = Path.cwd()
     try:
         target_path = ev.restore_rules(backup_filename, target_dir)
@@ -1806,5 +1848,554 @@ def evolve_restore(backup_filename):
     except Exception as e:
         click.secho(f"[ERROR] {e}", fg="red")
 
+def get_vendor(model_str: str) -> str:
+    m_lower = model_str.lower()
+    if "gemini" in m_lower or "google" in m_lower: return "google"
+    if "claude" in m_lower or "anthropic" in m_lower: return "anthropic"
+    if "deepseek" in m_lower: return "deepseek"
+    if "glm" in m_lower or "z-ai" in m_lower or "zhipu" in m_lower: return "z-ai"
+    if "qwen" in m_lower or "alibaba" in m_lower: return "qwen"
+    if "gpt" in m_lower or "openai" in m_lower: return "openai"
+    if "llama" in m_lower or "meta" in m_lower: return "meta"
+    if "laguna" in m_lower or "poolside" in m_lower: return "poolside"
+    if "nemotron" in m_lower or "nvidia" in m_lower: return "nvidia"
+
+    # Fallback to route_model
+    try:
+        routed, _, _ = route_model(model_str)
+        routed_lower = routed.lower()
+        if "gemini" in routed_lower or "google" in routed_lower: return "google"
+        if "claude" in routed_lower or "anthropic" in routed_lower: return "anthropic"
+        if "gpt" in routed_lower or "openai" in routed_lower: return "openai"
+        if "deepseek" in routed_lower: return "deepseek"
+        if "glm" in routed_lower or "z-ai" in routed_lower: return "z-ai"
+        if "laguna" in routed_lower or "poolside" in routed_lower: return "poolside"
+        if "nemotron" in routed_lower or "nvidia" in routed_lower: return "nvidia"
+    except Exception:
+        pass
+    parts = model_str.split('/')
+    return parts[0].lower() if len(parts) > 1 else model_str.lower()
+
+
+def validate_contract_schema(contract: dict) -> bool:
+    """Validate that the contract structure matches the expected design contract schema."""
+    required = ["meta", "tokens", "components", "rules", "enforcement"]
+    if not all(k in contract for k in required):
+        return False
+    if not isinstance(contract.get("meta"), dict) or "version" not in contract["meta"]:
+        return False
+    tokens = contract.get("tokens")
+    if not isinstance(tokens, dict):
+        return False
+    # Validate subkey types to prevent token_lint failures
+    if "color" in tokens and not isinstance(tokens["color"], dict):
+        return False
+    if "spacing" in tokens and not isinstance(tokens["spacing"], list):
+        return False
+    if "radius" in tokens and not isinstance(tokens["radius"], list):
+        return False
+    if "font_size" in tokens and not isinstance(tokens["font_size"], list):
+        return False
+    return True
+
+
+def parse_loop_patches(reply: str) -> List[Tuple[str, str, str]]:
+    """Parse patches from Implementer output.
+    Format:
+    <<<<
+    [file_path]
+    [original code to replace]
+    ====
+    [replacement code]
+    >>>>
+    """
+    pattern = re.compile(r"<<<<\s*\r?\n(.*?)\r?\n(.*?)\r?\n====\s*\r?\n(.*?)\r?\n>>>>", re.DOTALL)
+    matches = pattern.findall(reply)
+    patches = []
+    for file_path, original, replacement in matches:
+        patches.append((file_path.strip(), original, replacement))
+    return patches
+
+@cli.command("loop")
+@click.option('--goal', required=True, help="User-stated goal to drive the loop.")
+@click.option('--stop-cmd', required=True, help="Command that serves as ground-truth success oracle.")
+@click.option('--design-contract', required=True, help="Path to the design contract YAML.")
+@click.option('--gen-model', default="nvidia/z-ai/glm-5.2", help="Implementer (native LLM).")
+@click.option('--audit-model', default="openrouter/google/gemini-2.5-flash:free", help="Auditor model (different vendor).")
+@click.option('--redteam-model', default="zenmux/anthropic/claude-4-fable", help="Red Team model (different vendor).")
+@click.option('--ui-gates', default="token-lint,component-usage", help="Gates to enforce (comma-separated).")
+@click.option('--sandbox', default="worktree", type=click.Choice(["worktree", "none"]), help="Sandbox isolation mode.")
+@click.option('--max-iterations', default=10, type=int, help="Max iterations before budget stop.")
+@click.option('--cost-cap-usd', default=0.50, type=float, help="USD cost cap.")
+@click.option('--session', required=True, help="Session ID to load/save loop trace.")
+@click.option('--json-output', is_flag=True, help="Output final usage report in structured JSON.")
+def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_model, ui_gates, sandbox, max_iterations, cost_cap_usd, session, json_output):
+    """Goal-driven, multi-LLM, design-governed looping engine."""
+    import subprocess
+    import tempfile
+    import shutil
+    import yaml
+    import hashlib
+    import token_lint
+
+
+
+    # startup vendor check
+    v_gen = get_vendor(gen_model)
+    v_aud = get_vendor(audit_model)
+    v_red = get_vendor(redteam_model)
+    vendors = {v_gen, v_aud, v_red}
+    if len(vendors) < 3:
+        click.secho(f"[ERROR] Start guard failed: Loop requires at least 3 distinct vendors to prevent self-preference bias.", fg="red", err=True)
+        click.secho(f"Configured vendors: Implementer={v_gen}, Auditor={v_aud}, Red Team={v_red}", fg="yellow", err=True)
+        sys.exit(1)
+
+    # load Design Contract
+    contract_path = Path(design_contract)
+    if not contract_path.exists():
+        click.secho(f"[ERROR] Design contract not found at {contract_path}", fg="red", err=True)
+        sys.exit(1)
+
+    with open(contract_path, "r", encoding="utf-8") as f:
+        contract = yaml.safe_load(f)
+
+    # Create sandbox
+    cwd = Path.cwd()
+    sandbox_path = cwd
+    is_worktree = False
+
+    if sandbox == "worktree":
+        click.echo("[INIT] Creating git worktree sandbox...")
+        try:
+            # check if in git
+            git_ok = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+            if git_ok.returncode == 0:
+                head_commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+                import uuid
+                temp_sandbox = Path(tempfile.gettempdir()) / f"walkie-sandbox-{session}-{uuid.uuid4().hex[:8]}"
+                if temp_sandbox.exists():
+                    subprocess.run(["git", "worktree", "prune"], capture_output=True)
+                    shutil.rmtree(temp_sandbox, ignore_errors=True)
+
+                subprocess.run(["git", "worktree", "add", "--detach", str(temp_sandbox), head_commit], check=True, capture_output=True)
+                sandbox_path = temp_sandbox
+                is_worktree = True
+                click.secho(f"Sandbox created via git worktree: {sandbox_path}", fg="green")
+            else:
+                click.secho("Not in git repo, bypassing worktree sandbox.", fg="yellow")
+        except Exception as e:
+            click.secho(f"Warning: git worktree failed: {e}. Running in-place.", fg="yellow")
+
+    # Accumulator structure
+    accumulator = {
+        "total_usd": 0.0,
+        "iterations": 0,
+        "outcome": "STUCK",
+        "models": {},
+        "roles": {
+            "Implementer": {"input": 0, "output": 0, "usd": 0.0},
+            "Auditor": {"input": 0, "output": 0, "usd": 0.0},
+            "Red Team": {"input": 0, "output": 0, "usd": 0.0}
+        },
+        "history": []
+    }
+
+    class BudgetCapExceeded(Exception):
+        pass
+
+    def get_model_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -> float:
+        m_lower = model_name.lower()
+        if ":free" in m_lower or "-free" in m_lower or "/free" in m_lower:
+            return 0.0
+        try:
+            import litellm
+            routed, _, _ = route_model(model_name)
+            if ":free" in routed.lower() or "-free" in routed.lower() or "/free" in routed.lower():
+                return 0.0
+            cost = litellm.completion_cost(model=routed, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+            if cost is not None:
+                return float(cost)
+        except Exception:
+            pass
+        in_p, out_p = 0.000002, 0.000006
+        m_lower = model_name.lower()
+        if any(x in m_lower for x in ("mini", "flash", "8b", "7b")):
+            in_p, out_p = 0.00000015, 0.0000006
+        elif any(x in m_lower for x in ("sonnet", "pro", "70b")):
+            in_p, out_p = 0.000003, 0.000015
+        elif any(x in m_lower for x in ("opus", "ultra")):
+            in_p, out_p = 0.000015, 0.000075
+        return (prompt_tokens * in_p) + (completion_tokens * out_p)
+
+    def log_usage(model_name: str, role: str, usage: dict):
+        if not usage: return
+        in_t = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
+        out_t = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
+        cost = get_model_cost(model_name, in_t, out_t)
+
+        if model_name not in accumulator["models"]:
+            accumulator["models"][model_name] = {"input": 0, "output": 0, "usd": 0.0}
+        accumulator["models"][model_name]["input"] += in_t
+        accumulator["models"][model_name]["output"] += out_t
+        accumulator["models"][model_name]["usd"] += cost
+
+        accumulator["roles"][role]["input"] += in_t
+        accumulator["roles"][role]["output"] += out_t
+        accumulator["roles"][role]["usd"] += cost
+        accumulator["total_usd"] += cost
+
+        if accumulator["total_usd"] >= cost_cap_usd:
+            raise BudgetCapExceeded(f"Budget cap of ${cost_cap_usd:.2f} reached.")
+
+    # Load session trace
+    session_id = f"loop_{session}"
+    sess_data = load_session(session_id) or {"session_id": session_id, "turns": []}
+
+    # Tracking metrics to prevent oscillation / stuck
+    last_diff_hash = None
+    last_score = -1
+    oscillation_count_diff = 0
+    oscillation_count_score = 0
+    patched_files_set = set()
+
+    def get_in_scope_files(s_path, c_data):
+        import fnmatch
+        import os
+        globs = c_data.get("enforcement", {}).get("token_lint", {}).get("scan_globs", ["**/*"])
+        files_map = {}
+        for root, _, files in os.walk(s_path):
+            if any(x in root for x in ('.git', '.walkie', 'venv', 'node_modules', '__pycache__')): continue
+            for file in files:
+                f_path = Path(root) / file
+                rel = f_path.relative_to(s_path).as_posix()
+                if any(fnmatch.fnmatch(rel, g) for g in globs):
+                    try:
+                        files_map[rel] = f_path.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+        return files_map
+
+    # MAIN LOOP
+    gates_list = [g.strip() for g in ui_gates.split(",")]
+    import time
+
+    try:
+        for it in range(1, max_iterations + 1):
+            it_start_time = time.time()
+            accumulator["iterations"] = it
+            click.echo(f"\n--- ITERATION {it} ---")
+
+            # 1. OBSERVE (Run stop command)
+            click.echo("[OBSERVE] Running stop oracle command in sandbox...")
+            try:
+                res_stop = subprocess.run(stop_cmd, shell=True, cwd=str(sandbox_path), capture_output=True, text=True, timeout=60.0)
+                stop_code = res_stop.returncode
+                stop_output = res_stop.stdout + "\n" + res_stop.stderr
+            except subprocess.TimeoutExpired:
+                stop_code = -1
+                stop_output = "Command timed out after 60s."
+
+            # Scan changed/patched files to evaluate design gates
+            modified_files = {}
+            if it == 1:
+                modified_files = get_in_scope_files(sandbox_path, contract)
+            else:
+                for rel_f in patched_files_set:
+                    f_path = sandbox_path / rel_f
+                    if f_path.exists() and f_path.is_file():
+                        try:
+                            modified_files[rel_f] = f_path.read_text(encoding="utf-8")
+                        except Exception:
+                            pass
+                if not modified_files:
+                    modified_files = get_in_scope_files(sandbox_path, contract)
+
+            # Design Contract Gates check
+            gates_passed = True
+            gate_feedback = ""
+
+            if "token-lint" in gates_list and modified_files:
+                gate_res = token_lint.run_gate(modified_files, str(contract_path))
+                if not gate_res["passed"]:
+                    gates_passed = False
+                    gate_feedback += f"\n[token-lint] Design Contract violations:\n{gate_res['feedback']}"
+
+            if "component-usage" in gates_list and modified_files:
+                comps = contract.get("components", {})
+                for rel_f, content in modified_files.items():
+                    for comp_name, comp_cfg in comps.items():
+                        canon_imp = comp_cfg.get("import")
+                        if re.search(rf"\b{comp_name}\b", content):
+                            imp_pattern = rf"import\s+.*\b{comp_name}\b.*\s+from\s+['\"]{re.escape(canon_imp)}['\"]"
+                            if not re.search(imp_pattern, content):
+                                if canon_imp in rel_f or rel_f.endswith(comp_name + ".tsx") or rel_f.endswith(comp_name + ".jsx"):
+                                    continue
+                                gates_passed = False
+                                gate_feedback += f"\n[component-usage] File '{rel_f}' uses canonical component '{comp_name}' without the correct import: '{canon_imp}'"
+
+            # Check Stop oracle condition
+            if stop_code == 0 and gates_passed:
+                click.secho(f"[STOP] Oracle conditions satisfied. stop-cmd passed and design gates are clean!", fg="green")
+                accumulator["outcome"] = "SUCCESS"
+                break
+
+            # 2. RED TEAM (Adversarial critique)
+            click.echo("[RED TEAM] Searching for concrete reproducible defects...")
+            rt_messages = [
+                {"role": "system", "content": "You are an adversarial Red Team critic. Locate reproducible defects in the code relative to the Design Contract and goal."},
+                {"role": "user", "content": f"Goal: {goal}\nModified Files:\n" + "\n".join(f"--- File: {k} ---\n{v[:4000]}" for k, v in modified_files.items()) + f"\n\nStop Command Output:\n{stop_output[:2000]}\nOutput a JSON object with: 'defect_found' (bool), 'description' (string), 'reproducible_case' (string), 'amendment_proposal' (optional dictionary of missing contract tokens to merge under 'tokens')."}
+            ]
+            try:
+                rt_reply, rt_usage = call_llm(redteam_model, rt_messages, response_format={"type": "json_object"})
+                log_usage(redteam_model, "Red Team", rt_usage)
+                rt_data = json.loads(rt_reply)
+            except Exception as e:
+                rt_data = {"defect_found": False, "description": f"Failed to call Red Team: {e}"}
+
+            # 3. ACT (Implementer Repairs)
+            click.echo("[ACT] Requesting Implementer to patch code...")
+            rt_desc = rt_data.get('description', '') if isinstance(rt_data, dict) and rt_data.get('defect_found') else ''
+            rt_repro = f"\nReproducible defect case:\n{rt_data.get('reproducible_case')}" if isinstance(rt_data, dict) and rt_data.get('reproducible_case') else ""
+            imp_prompt = f"""Goal: {goal}
+Stop Command Output:
+{stop_output[:2000]}
+
+Design Contract Constraints:
+{yaml.dump(contract.get('tokens', {}))}
+
+Current violations:
+{gate_feedback}
+{rt_data.get('description', '') if rt_data.get('defect_found') else ''}
+
+Fix these issues and return the correct file patches. Use the standard walkie loop patch blocks:
+<<<<
+[file_path]
+[original code to replace]
+====
+[replacement code]
+>>>>
+"""
+            imp_messages = [
+                {"role": "system", "content": "You are a professional software builder. Implement fixes following the Design Contract exactly."},
+                {"role": "user", "content": imp_prompt}
+            ]
+
+            try:
+                imp_reply, imp_usage = call_llm(gen_model, imp_messages)
+                log_usage(gen_model, "Implementer", imp_usage)
+                patches = parse_loop_patches(imp_reply)
+
+                # Apply patches in sandbox CWD
+                diff_hashes = []
+                format_warnings = []
+                for filepath, original, replacement in patches:
+                    if not filepath or ("/" not in filepath and "\\" not in filepath and "." not in filepath) or len(filepath) > 100:
+                        format_warnings.append(f"Rejected patch block filepath: '{filepath}' does not look like a valid relative path.")
+                        continue
+                    target_p = sandbox_path / filepath
+                    if not target_p.exists():
+                        format_warnings.append(f"Target file '{filepath}' to patch does not exist in the sandbox.")
+                        continue
+
+                    orig_content = target_p.read_text(encoding="utf-8")
+                    if original in orig_content:
+                        new_content = orig_content.replace(original, replacement)
+                        target_p.write_text(new_content, encoding="utf-8")
+                        diff_hashes.append(hashlib.md5(new_content.encode("utf-8")).hexdigest())
+                        patched_files_set.add(filepath)
+                    else:
+                        format_warnings.append(f"Original block to replace in '{filepath}' not found exactly. Check whitespace/newlines.")
+
+                if format_warnings:
+                    gate_feedback += "\n[patch-errors] The following patches failed to apply:\n" + "\n".join(f"- {w}" for w in format_warnings)
+
+                # Detect oscillation via diff hash
+                current_diff_hash = "".join(diff_hashes)
+                if current_diff_hash == last_diff_hash:
+                    oscillation_count_diff += 1
+                else:
+                    oscillation_count_diff = 0
+                last_diff_hash = current_diff_hash
+
+                if oscillation_count_diff >= 2:
+                    click.secho("[STOP] Loop stuck (diff oscillation detected). Discarding sandbox.", fg="yellow")
+                    accumulator["outcome"] = "STUCK"
+                    break
+
+            except Exception as e:
+                click.secho(f"Warning: Implementer call failed: {e}", fg="red")
+
+            # Rebuild modified_files from sandbox to ensure Panel (Auditor) grades fresh content
+            modified_files = {}
+            for rel_f in patched_files_set:
+                f_path = sandbox_path / rel_f
+                if f_path.exists() and f_path.is_file():
+                    try:
+                        modified_files[rel_f] = f_path.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+            if not modified_files:
+                modified_files = get_in_scope_files(sandbox_path, contract)
+
+            # 4. PANEL (Auditor Grading)
+            click.echo("[PANEL] Requesting Auditor evaluation...")
+            aud_prompt = f"""Evaluate the current sandbox implementation against the goal: '{goal}'.
+Modified Files:
+""" + "\n".join(f"--- File: {k} ---\n{v[:4000]}" for k, v in modified_files.items()) + f"""
+JSON output only containing:
+{{
+  "violations": ["list of design token or functional errors"],
+  "score": 0 to 100,
+  "verdict": "CONTINUE" or "REPAIR" or "SUCCESS",
+  "reason": "Detailed critique",
+  "amendment_proposal": "optional dictionary of proposed Design Contract token changes to merge under 'tokens'"
+}}"""
+            aud_messages = [
+                {"role": "system", "content": "You are a Design Contract Auditor. Check conformance to style scales and component usages."},
+                {"role": "user", "content": aud_prompt}
+            ]
+            try:
+                aud_reply, aud_usage = call_llm(audit_model, aud_messages, response_format={"type": "json_object"})
+                log_usage(audit_model, "Auditor", aud_usage)
+                aud_data = json.loads(aud_reply)
+
+                # Progress tracking via score plateau
+                current_score = aud_data.get("score", 0)
+                if current_score <= last_score and it > 1:
+                    oscillation_count_score += 1
+                else:
+                    oscillation_count_score = 0
+                last_score = current_score
+
+                if oscillation_count_score >= 3:
+                    click.secho("[STOP] Loop stuck (score plateau detected). Discarding sandbox.", fg="yellow")
+                    accumulator["outcome"] = "STUCK"
+                    break
+            except Exception as e:
+                aud_data = {"score": 50, "verdict": "CONTINUE", "reason": f"Auditor failed: {e}"}
+
+            # Consensus-gated Contract Amendment (requires both external models)
+            rt_amend = (rt_data.get("amendment_proposal") if isinstance(rt_data, dict) else None)
+            aud_amend = (aud_data.get("amendment_proposal") if isinstance(aud_data, dict) else None)
+            if rt_amend and aud_amend and v_aud != v_red:
+                has_updates = False
+                import copy
+                temp_contract = copy.deepcopy(contract)
+                # Merge proposed tokens/keys
+                if isinstance(rt_amend, dict) and rt_amend:
+                    temp_contract.setdefault("tokens", {}).update(rt_amend)
+                    has_updates = True
+                if isinstance(aud_amend, dict) and aud_amend:
+                    temp_contract.setdefault("tokens", {}).update(aud_amend)
+                    has_updates = True
+
+                if has_updates:
+                    click.secho("[CONSENSUS] Panel consensus achieved on Design Contract amendment!", fg="green")
+                    temp_contract["meta"]["version"] += 1
+                    if "amended_by" not in temp_contract["meta"]:
+                        temp_contract["meta"]["amended_by"] = []
+                    temp_contract["meta"]["amended_by"].append(f"iter_{it}_consensus")
+
+                    # Perform schema validation
+                    if validate_contract_schema(temp_contract):
+                        contract = temp_contract
+                        # Atomic write via tmp replace
+                        tmp_contract = contract_path.parent / (contract_path.name + ".tmp")
+                        with open(tmp_contract, "w", encoding="utf-8") as f:
+                            yaml.safe_dump(contract, f)
+                        tmp_contract.replace(contract_path)
+
+            # Re-run stop command right after ACT/verify phase for next iteration or exit validation
+            click.echo("[VERIFY] Re-running stop command after repair phase...")
+            try:
+                res_stop = subprocess.run(stop_cmd, shell=True, cwd=str(sandbox_path), capture_output=True, text=True, timeout=60.0)
+                stop_code = res_stop.returncode
+                stop_output = res_stop.stdout + "\n" + res_stop.stderr
+            except subprocess.TimeoutExpired:
+                stop_code = -1
+                stop_output = "Command timed out after 60s."
+
+            # Persist turn info
+            sess_data["turns"].append({
+                "iteration": it,
+                "score": (aud_data.get("score") if isinstance(aud_data, dict) else 0),
+                "defect_found": (rt_data.get("defect_found") if isinstance(rt_data, dict) else False),
+                "violations": (aud_data.get("violations", []) if isinstance(aud_data, dict) else []),
+                "cumulative_usd_spent": accumulator["total_usd"]
+            })
+            save_session(session_id, sess_data)
+
+            # Per-iteration wall clock timeout check (max 180s)
+            if time.time() - it_start_time > 180.0:
+                click.secho("[STOP] Iteration timed out after 180s.", fg="yellow")
+                accumulator["outcome"] = "TIMEOUT"
+                break
+
+    except BudgetCapExceeded as e:
+        click.secho(f"[STOP] {e}", fg="yellow")
+        accumulator["outcome"] = "BUDGET"
+
+    # LOOP FINISH / REPORTING
+    click.echo("\n=================================")
+    click.secho(f"Loop completed: {accumulator['outcome']}", fg="cyan", bold=True)
+    click.echo(f"Total Iterations: {accumulator['iterations']}")
+    click.echo(f"Total Cost: ${accumulator['total_usd']:.5f} USD")
+
+    click.echo("\n[Token & Cost Breakdown]")
+    click.echo("  * By Model:")
+    for m, info in accumulator["models"].items():
+        role_label = "Implementer" if m == gen_model else "External"
+        click.echo(f"    - Model {m} ({role_label}):")
+        click.echo(f"      Input: {info['input']} tokens")
+        click.echo(f"      Output: {info['output']} tokens")
+        click.echo(f"      Cost: ${info['usd']:.5f} USD")
+
+    click.echo("\n[Role Breakdown]")
+    for role, info in accumulator["roles"].items():
+        click.echo(f"  - {role}: In={info['input']} Out={info['output']} Cost=${info['usd']:.5f} USD")
+
+    click.echo("\n[Iteration History]")
+    for turn in sess_data.get("turns", []):
+        click.echo(f"  - Iteration {turn['iteration']}: Score={turn.get('score')} Defect={turn.get('defect_found')} CumulativeCostSpent=${turn.get('cumulative_usd_spent', 0.0):.5f} USD")
+    click.echo("=================================\n")
+
+    # Copy back patched files to host repository on SUCCESS
+    if accumulator["outcome"] == "SUCCESS":
+        backup_dir = cwd / ".walkie" / "backup" / f"{session}_{int(time.time())}"
+        backed_up = False
+        for rel_f in patched_files_set:
+            src = sandbox_path / rel_f
+            dest = cwd / rel_f
+            if dest.exists() and src.exists():
+                try:
+                    if dest.read_text(encoding="utf-8") != src.read_text(encoding="utf-8"):
+                        backup_file = backup_dir / rel_f
+                        backup_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(dest, backup_file)
+                        backed_up = True
+                except Exception as be:
+                    click.secho(f"[ERROR] Failed to backup {rel_f}: {be}. Aborting copy-back for this file to prevent data loss.", fg="red")
+                    continue
+            if src.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+        if backed_up:
+            click.secho(f"[INFO] Existing host files were modified during loop. Backups saved under: {backup_dir.relative_to(cwd)}", fg="yellow")
+        click.secho("[SUCCESS] Patched files successfully copied back to working directory.", fg="green")
+
+    # Clean up worktree if detached
+    if is_worktree and sandbox_path != cwd:
+        click.echo("[CLEANUP] Removing worktree sandbox...")
+        subprocess.run(["git", "worktree", "remove", "-f", str(sandbox_path)], capture_output=True)
+
+    if json_output:
+        click.echo(json.dumps(accumulator, indent=2))
+
+    # If successful, output final status
+    if accumulator["outcome"] == "SUCCESS":
+        click.secho("SUCCESS: Stop oracle passed all validation checks!", fg="green")
+
+
 if __name__ == '__main__':
     cli()
+

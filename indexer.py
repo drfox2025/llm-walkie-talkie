@@ -18,10 +18,11 @@ CONTEXT_PACKET_MAX_CHARS = 3500
 
 def parse_file_symbols(file_path: Path) -> Dict[str, Any]:
     """
-    Parses a Python file to extract top-level imports, classes (with methods), and functions.
-    Non-Python files are silently ignored (returns language 'unsupported').
+    Parses a Python, JavaScript, or TypeScript file to extract top-level imports, classes (with methods), and functions.
+    Non-supported files are silently ignored (returns language 'unsupported').
     """
-    if file_path.suffix.lower() != '.py':
+    suffix = file_path.suffix.lower()
+    if suffix not in ('.py', '.js', '.jsx', '.ts', '.tsx'):
         return {'language': 'unsupported'}
         
     try:
@@ -29,41 +30,70 @@ def parse_file_symbols(file_path: Path) -> Dict[str, Any]:
     except Exception as e:
         return {'error': f'Read error: {str(e)}'}
 
-    try:
-        tree = ast.parse(content, filename=str(file_path))
-    except SyntaxError as e:
-        return {'error': f'SyntaxError: {str(e)}'}
+    if suffix == '.py':
+        try:
+            tree = ast.parse(content, filename=str(file_path))
+        except SyntaxError as e:
+            return {'error': f'SyntaxError: {str(e)}'}
 
-    imports = []
-    classes = []
-    functions = []
+        imports = []
+        classes = []
+        functions = []
 
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.append(node.module)
-        elif isinstance(node, ast.ClassDef):
-            methods = []
-            for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    args = [a.arg for a in item.args.args]
-                    sig = f"{item.name}({', '.join(args)})"
-                    methods.append(sig)
-            classes.append({'name': node.name, 'methods': methods})
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            args = [a.arg for a in node.args.args]
-            sig = f"{node.name}({', '.join(args)})"
-            functions.append(sig)
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.append(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imports.append(node.module)
+            elif isinstance(node, ast.ClassDef):
+                methods = []
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        args = [a.arg for a in item.args.args]
+                        sig = f"{item.name}({', '.join(args)})"
+                        methods.append(sig)
+                classes.append({'name': node.name, 'methods': methods})
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                args = [a.arg for a in node.args.args]
+                sig = f"{node.name}({', '.join(args)})"
+                functions.append(sig)
 
-    return {
-        'language': 'python',
-        'imports': list(set(imports)),
-        'classes': classes,
-        'functions': functions
-    }
+        return {
+            'language': 'python',
+            'imports': list(set(imports)),
+            'classes': classes,
+            'functions': functions
+        }
+    else:
+        # Heuristic JS/TS parser
+        import re
+        imports = []
+        import_matches = re.findall(r"(?:import\s+.*?\s+from\s+|require\s*\(\s*)['\"]([^'\"]+)['\"]", content)
+        for m in import_matches:
+            imports.append(m)
+
+        functions = []
+        func_decls = re.findall(r"function\s+([a-zA-Z0-9_$]+)\s*\(", content)
+        for f in func_decls:
+            functions.append(f"{f}()")
+        
+        arrow_funcs = re.findall(r"const\s+([a-zA-Z0-9_$]+)\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>", content)
+        for f in arrow_funcs:
+            functions.append(f"{f}()")
+
+        classes = []
+        class_decls = re.findall(r"class\s+([a-zA-Z0-9_$]+)", content)
+        for c in class_decls:
+            classes.append({'name': c, 'methods': []})
+
+        return {
+            'language': 'javascript' if suffix in ('.js', '.jsx') else 'typescript',
+            'imports': list(set(imports)),
+            'classes': classes,
+            'functions': list(set(functions))
+        }
 
 def get_file_hash(file_path: Path) -> str:
     """Fallback hash to detect changes if mtime is suspicious."""
@@ -114,7 +144,8 @@ def build_or_update_symbols_index(workspace_root: Path, force_walk: bool = False
     for root, dirs, files in os.walk(workspace_root):
         dirs[:] = [d for d in dirs if d not in ignore_dirs]
         for file in files:
-            if not file.endswith('.py'):
+            ext = os.path.splitext(file)[1].lower()
+            if ext not in ('.py', '.js', '.jsx', '.ts', '.tsx'):
                 continue
             
             full_path = Path(root) / file
@@ -151,7 +182,7 @@ def build_or_update_symbols_index(workspace_root: Path, force_walk: bool = False
     # Simplified mapping: map "my_module" to files that import it
     reverse_deps = {}
     for rel_path, data in files_cache.items():
-        if data.get('language') != 'python':
+        if data.get('language') not in ('python', 'javascript', 'typescript'):
             continue
             
         imports = data.get('imports', [])
@@ -189,7 +220,7 @@ def compile_context_packet(target_file: Path, workspace_root: Path, index_data: 
     reverse_deps = index_data.get('reverse_deps', {})
     
     target_data = files.get(rel_target)
-    if not target_data or target_data.get('language') != 'python':
+    if not target_data or target_data.get('language') not in ('python', 'javascript', 'typescript'):
         return ""
         
     packet_lines = []

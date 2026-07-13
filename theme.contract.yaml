@@ -1,0 +1,66 @@
+# theme.contract.yaml — Design Contract v1
+meta:
+  version: 1
+  framework: "react"
+  styling: "tailwind"
+  amended_by: []
+
+tokens:
+  color:
+    bg.default:     "#ffffff"
+    bg.subtle:      "#f5f5f5"
+    fg.default:     "#111827"
+    fg.muted:       "#6b7280"
+    brand.primary:  "#2563eb"
+    danger.default: "#dc2626"
+    success.default: "#16a34a"
+    border.default: "#e5e7eb"
+  spacing:          [0, 4, 8, 12, 16, 24, 32, 48, 64]
+  radius:           [0, 4, 8, 12, 9999]
+  font_size:        [12, 14, 16, 18, 20, 24, 30, 36]
+  font_weight:      [400, 500, 600, 700]
+  shadow:
+    sm: "0 1px 2px rgba(0,0,0,0.05)"
+    md: "0 4px 6px rgba(0,0,0,0.1)"
+  z_index:          {base: 0, dropdown: 1000, modal: 1300, toast: 1500}
+  breakpoint:       {sm: 640, md: 768, lg: 1024, xl: 1280}
+
+components:
+  Button:
+    import: "@/components/ui/Button"
+    variants: [primary, secondary, danger, ghost]
+    sizes:    [sm, md, lg]
+    required_states: [default, hover, focus, active, disabled, loading]
+    a11y:
+      min_tap_target_px: 44
+      focus_visible: true
+  Input:
+    import: "@/components/ui/Input"
+    variants: [text, error]
+    required_states: [default, focus, error, disabled]
+    a11y: {associated_label: true}
+  Modal:
+    import: "@/components/ui/Modal"
+    required_states: [open, closed]
+    a11y: {focus_trap: true, esc_closes: true, restores_focus: true}
+
+rules:
+  layout: {grid: 12, gutter: 24, max_content_width: 1280}
+  interaction:
+    errors_surface_via: "inline + toast"
+    loading_pattern: "skeleton"
+  a11y:
+    min_contrast_normal: 4.5
+    min_contrast_large:  3.0
+
+enforcement:
+  token_lint:
+    fail_on_offlist_color: true
+    fail_on_offlist_spacing: true
+    fail_on_offlist_radius: true
+    scan_globs: ["src/**/*.tsx", "src/**/*.ts", "src/**/*.css"]
+    allow_files: ["src/theme/tokens.ts", "theme.contract.yaml"]
+  component_usage:
+    forbid_raw: ["button", "input", "dialog"]
+  amendment:
+    require_consensus: 2

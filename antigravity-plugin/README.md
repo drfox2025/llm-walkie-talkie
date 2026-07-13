@@ -1,29 +1,28 @@
 # LLM Walkie-Talkie (IDE Agent Consultation CLI)
 
-```text
-╔═════════════════════════════════════════════════════════════════════════════╗
-║ ██╗     ██╗     ███╗   ███╗  ██╗    ██╗ █████╗ ██╗     ██╗  ██╗██╗███████╗  ║
-║ ██║     ██║     ████╗ ████║  ██║    ██║██╔══██╗██║     ██║ ██╔╝██║██╔════╝  ║
-║ ██║     ██║     ██╔████╔██║  ██║ █╗ ██║███████║██║     █████╔╝ ██║█████╗    ║
-║ ██║     ██║     ██║╚██╔╝██║  ██║███╗██║██╔══██║██║     ██╔═██╗ ██║██╔══╝    ║
-║ ███████╗███████╗██║ ╚═╝ ██║  ╚███╔███╔╝██║  ██║███████╗██║  ██╗██║███████╗  ║
-║ ╚══════╝╚══════╝╚═╝     ╚═╝   ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝  ║
-║                ████████╗ █████╗ ██╗     ██╗  ██╗██╗███████╗                 ║
-║                ╚══██╔══╝██╔══██╗██║     ██║ ██╔╝██║██╔════╝                 ║
-║                   ██║   ███████║██║     █████╔╝ ██║█████╗                   ║
-║                   ██║   ██╔══██║██║     ██╔═██╗ ██║██╔══╝                   ║
-║                   ██║   ██║  ██║███████╗██║  ██╗██║███████╗                 ║
-║                   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚══════╝                 ║
-╚═════════════════════════════════════════════════════════════════════════════╝
-```
+**Tóm tắt tiếng Việt:**
+LLM Walkie-Talkie (LWT) là một giao diện dòng lệnh bảo mật và tối ưu hóa token dành riêng cho Antigravity IDE Agent và các lập trình viên. LWT đóng vai trò là cầu nối giao tiếp thông minh, giúp mô hình ngôn ngữ nội bộ của IDE Agent dễ dàng tham vấn các mô hình bên ngoài mạnh mẽ hơn. Bằng cách ủy thác việc biên soạn mã nguồn và vá lỗi tự động cho các mô hình ngoài, công cụ giúp giảm đáng kể chi phí tiêu thụ token nội bộ của Agent mà vẫn bảo vệ an toàn mã khóa API toàn cục.
 
-LLM Walkie-Talkie is a **secure**, lightweight, and token-efficient CLI tool **fully vibe coded** and specifically designed for the **Antigravity IDE Agent** and terminal users. 
+Điểm nổi bật của chương trình là khả năng tự động quét các cổng API để phát hiện và báo cáo các mô hình miễn phí đang hoạt động, đồng thời kiểm tra trực tiếp độ trễ kết nối thông qua các gói thăm dò để tự cập nhật bộ nhớ đệm trạng thái hệ thống. Bên cạnh đó, LWT tích hợp một quy trình vòng lặp tự sửa lỗi khép kín, phân chia nhiệm vụ đồng thời cho ba vai trò độc lập gồm mô hình triển khai mã nguồn, mô hình kiểm toán thiết kế giao diện và mô hình kiểm thử tìm lỗi xung đột. Toàn bộ quá trình chạy thử được cô lập hoàn toàn trên một phân nhánh Git Worktree độc lập để tránh ảnh hưởng đến thư mục làm việc hiện tại, đi kèm cơ chế sao lưu tự động ngăn ngừa mất mát dữ liệu trước khi cập nhật mã nguồn làm việc chính.
 
-It allows Antigravity to pass entire codebases, multi-file contexts, base64 multimodal attachments, and conversation logs securely to high-performing external LLM providers (ZenMux, NVIDIA NIM, OpenRouter, Anthropic, OpenAI) with **real-time streaming** and **automated surgical patching**. By offloading 80%+ of code generation and patching to these advanced external models, it dramatically minimizes the token costs of internal Antigravity models while keeping API keys isolated and protected.
+**Cách sử dụng kết hợp với Gọi Kỹ năng (Skill Calling):**
+1. **Khởi tạo Design Contract**: Chạy `walkie setup` và thiết lập `theme.contract.yaml` trong thư mục gốc.
+2. **Kỹ năng gọi Tự động**: IDE Agent sẽ tự động đọc kỹ năng `llm-loop` (trong `.agents/skills/llm_loop/SKILL.md`) để ủy thác các nhiệm vụ thiết kế giao diện phức tạp. Kỹ năng này hướng dẫn Agent gọi lệnh:
+   ```bash
+   walkie loop --goal "Xây dựng nút bấm đăng nhập" --stop-cmd "npm test" --design-contract theme.contract.yaml --session sess_1
+   ```
+   Lệnh trên sẽ tự động cô lập dự án, tiến hành vòng lặp tự sửa lỗi và tối ưu cho đến khi stop-cmd thành công và đạt chuẩn chất lượng thiết kế.
 
-
+*(English version is below)*
 
 ---
+<div align="center">
+  <img src="../assets/banner.png" alt="LLM Walkie-Talkie Banner" width="100%">
+</div>
+
+LLM Walkie-Talkie (LWT) is a secure, token-efficient command-line interface and integration bridge designed specifically for the Antigravity IDE Agent and developers. It serves as a communication channel, enabling local IDE models to query and consult highly capable external large language models (LLMs). By offloading expensive code generation and automated patching tasks to external services, LWT significantly lowers token consumption for the native IDE models while keeping API credentials isolated and protected.
+
+Among its technical capabilities, LWT scans provider endpoints on-demand to identify and notify developers of available free-tier models, automatically probing connection health and latencies to update local cache files. It also orchestrates an autonomous, goal-driven patching loop that coordinates three separate LLM roles—an Implementer, a Design Contract Auditor, and an adversarial Red Team critic—to systematically refine code quality and prevent developer self-justification bias. To ensure security, all validation testing runs in isolated Git Worktree sandboxes, complete with automatic file backup histories that prevent host directory data loss upon copy-back.
 
 ## 🚀 Key Features
 
@@ -161,27 +160,4 @@ walkie evolve --context scratch/cot.json -m nvidia/z-ai/glm-5.2
   ```
 * **Use Case:** Permanently correct bad agent behaviors (such as searching test directories during a standard refactoring task or forgetting to verify imports) on-the-fly.
 
----
-
-## 🌐 Open VSX Marketplace Publishing Guide
-
-To publish the packaged extension (`llm-walkie-talkie-1.0.0.vsix`) to the Open VSX Registry (used by Antigravity and VSCodium):
-
-### Option A: Command Line Interface (CLI)
-1. **Get an Access Token:**
-   - Sign in to the [Open VSX Registry](https://open-vsx.org/).
-   - Go to your profile settings and generate a Personal Access Token (PAT).
-2. **Claim the Namespace:**
-   - Ensure you have registered the namespace `drfox2025` (matching the `"publisher"` field in `package.json`).
-3. **Publish:**
-   - Execute the following command inside the `antigravity-plugin/` directory:
-     ```bash
-     npx ovsx publish llm-walkie-talkie-1.0.0.vsix -p <YOUR_OPEN_VSX_TOKEN>
-     ```
-
-### Option B: Manual Web Upload
-1. Sign in to the [Open VSX Registry](https://open-vsx.org/).
-2. Navigate to your publisher namespace page.
-3. Click the **Upload Extension** button.
-4. Select the compiled `llm-walkie-talkie-1.0.0.vsix` file from the `antigravity-plugin/` directory and upload it directly.
 
