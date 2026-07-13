@@ -17,7 +17,7 @@ LLM Walkie-Talkie (LWT) là một giao diện dòng lệnh bảo mật và tối
 
 ---
 <div align="center">
-  <img src="../assets/banner.png" alt="LLM Walkie-Talkie Banner" width="100%">
+  <img src="https://raw.githubusercontent.com/drfox2025/llm-walkie-talkie/main/assets/banner.png" alt="LLM Walkie-Talkie Banner" width="100%">
 </div>
 
 LLM Walkie-Talkie (LWT) is a secure, token-efficient command-line interface and integration bridge designed specifically for the Antigravity IDE Agent and developers. It serves as a communication channel, enabling local IDE models to query and consult highly capable external large language models (LLMs). By offloading expensive code generation and automated patching tasks to external services, LWT significantly lowers token consumption for the native IDE models while keeping API credentials isolated and protected.
