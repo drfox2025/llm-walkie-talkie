@@ -1,0 +1,23 @@
+{
+  "name": "llm-walkie-talkie",
+  "displayName": "LLM Walkie-Talkie",
+  "version": "1.0.0",
+  "publisher": "drfox2025",
+  "description": "Consult external LLMs directly from Antigravity IDE. Saves native token usage and enables surgical codebase patching.",
+  "icon": "logo.png",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drfox2025/llm-walkie-talkie"
+  },
+  "bugs": {
+    "url": "https://github.com/drfox2025/llm-walkie-talkie/issues"
+  },
+  "homepage": "https://github.com/drfox2025/llm-walkie-talkie#readme",
+  "contributes": {}
+}
