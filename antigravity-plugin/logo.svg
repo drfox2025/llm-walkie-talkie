@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Definitions for gradients and drop shadows -->
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f19" />
+      <stop offset="100%" stop-color="#111827" />
+    </linearGradient>
+    
+    <!-- Body Accent Gradient -->
+    <linearGradient id="accent-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+
+    <!-- Glowing Signal Gradient -->
+    <radialGradient id="glow-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="1" />
+      <stop offset="50%" stop-color="#6366f1" stop-opacity="0.5" />
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Speaker Mesh Gradient -->
+    <linearGradient id="mesh-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1f2937" />
+      <stop offset="50%" stop-color="#374151" />
+      <stop offset="100%" stop-color="#1f2937" />
+    </linearGradient>
+
+    <!-- Neon Accent Glow -->
+    <filter id="neon-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background Card with rounded corners -->
+  <rect width="512" height="512" rx="128" fill="url(#bg-grad)" />
+
+  <!-- Outer Glow Ring -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#6366f1" stroke-width="4" stroke-opacity="0.2" />
+
+  <!-- SIGNAL WAVES (from Antenna) -->
+  <circle cx="256" cy="70" r="45" fill="url(#glow-grad)" filter="url(#neon-glow)" opacity="0.6" />
+  <circle cx="256" cy="70" r="25" fill="#a855f7" />
+  <path d="M 210 50 A 60 60 0 0 1 302 50" fill="none" stroke="#a855f7" stroke-width="6" stroke-linecap="round" filter="url(#neon-glow)" />
+  <path d="M 180 30 A 100 100 0 0 1 332 30" fill="none" stroke="#6366f1" stroke-width="6" stroke-linecap="round" filter="url(#neon-glow)" opacity="0.7" />
+
+  <!-- WALKIE-TALKIE BODY -->
+  <!-- Antenna -->
+  <rect x="246" y="90" width="20" height="90" rx="6" fill="#1f2937" stroke="#374151" stroke-width="2" />
+  <rect x="241" y="90" width="30" height="15" rx="4" fill="#a855f7" />
+
+  <!-- Main Body Shadow -->
+  <rect x="156" y="176" width="200" height="270" rx="36" fill="#030712" opacity="0.5" />
+  
+  <!-- Main Body -->
+  <rect x="150" y="170" width="200" height="270" rx="36" fill="#111827" stroke="#374151" stroke-width="4" />
+
+  <!-- Volume / Channel Knobs -->
+  <rect x="180" y="145" width="30" height="25" rx="6" fill="#374151" />
+  <rect x="300" y="145" width="30" height="25" rx="6" fill="#374151" />
+
+  <!-- Side PTT Button (Push To Talk) -->
+  <path d="M 148 230 L 148 290" stroke="#a855f7" stroke-width="8" stroke-linecap="round" filter="url(#neon-glow)" />
+
+  <!-- Screen / Display (AI Network Interface) -->
+  <rect x="174" y="200" width="152" height="90" rx="16" fill="#030712" stroke="#1f2937" stroke-width="3" />
+  
+  <!-- Neural Net Nodes & Edges on Screen -->
+  <!-- Edges -->
+  <line x1="210" y1="230" x2="250" y2="215" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+  <line x1="210" y1="230" x2="230" y2="265" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+  <line x1="250" y1="215" x2="290" y2="235" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+  <line x1="230" y1="265" x2="290" y2="235" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+  <line x1="250" y1="215" x2="270" y2="270" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+  <line x1="290" y1="235" x2="270" y2="270" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+  <line x1="230" y1="265" x2="270" y2="270" stroke="#6366f1" stroke-width="2" opacity="0.6" />
+
+  <!-- Nodes (Glowing Dots) -->
+  <circle cx="210" cy="230" r="6" fill="#6366f1" filter="url(#neon-glow)" />
+  <circle cx="250" cy="215" r="5" fill="#a855f7" filter="url(#neon-glow)" />
+  <circle cx="290" cy="235" r="7" fill="#10b981" filter="url(#neon-glow)" />
+  <circle cx="230" cy="265" r="5" fill="#a855f7" filter="url(#neon-glow)" />
+  <circle cx="270" cy="270" r="6" fill="#6366f1" filter="url(#neon-glow)" />
+
+  <!-- Speaker Grille (Walkie Talkie slats) -->
+  <g transform="translate(180, 310)">
+    <rect x="0" y="0" width="140" height="90" rx="16" fill="url(#mesh-grad)" stroke="#1f2937" stroke-width="2" />
+    <!-- Grill Slats -->
+    <rect x="15" y="15" width="110" height="6" rx="3" fill="#090d16" />
+    <rect x="15" y="30" width="110" height="6" rx="3" fill="#090d16" />
+    <rect x="15" y="45" width="110" height="6" rx="3" fill="#090d16" />
+    <rect x="15" y="60" width="110" height="6" rx="3" fill="#090d16" />
+    <rect x="15" y="72" width="110" height="6" rx="3" fill="#090d16" />
+    
+    <!-- Neon Dot inside Grill (Status Light) -->
+    <circle cx="120" cy="75" r="4" fill="#10b981" filter="url(#neon-glow)" />
+  </g>
+</svg>
