@@ -11,6 +11,10 @@
   "categories": [
     "Other"
   ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/drfox2025/llm-walkie-talkie"
