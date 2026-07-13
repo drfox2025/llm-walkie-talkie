@@ -3,12 +3,30 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+function copyDirRecursiveSync(src, dest) {
+    if (!fs.existsSync(src)) {
+        return;
+    }
+    const stats = fs.statSync(src);
+    if (stats.isDirectory()) {
+        if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
+        }
+        const files = fs.readdirSync(src);
+        for (const file of files) {
+            copyDirRecursiveSync(path.join(src, file), path.join(dest, file));
+        }
+    } else {
+        fs.copyFileSync(src, dest);
+    }
+}
+
 function activate(context) {
     console.log('LLM Walkie-Talkie extension activated.');
 
     const sourcePluginJson = path.join(context.extensionPath, 'plugin.json');
     const sourceLogo = path.join(context.extensionPath, 'logo.png');
-    const sourceSkill = path.join(context.extensionPath, 'skills', 'ai_consult', 'SKILL.md');
+    const sourceSkills = path.join(context.extensionPath, 'skills');
 
     // Target global plugins path: ~/.gemini/config/plugins/llm-walkie-talkie
     const destDir = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'llm-walkie-talkie');
@@ -29,14 +47,9 @@ function activate(context) {
             fs.copyFileSync(sourceLogo, path.join(destDir, 'logo.png'));
         }
 
-        // Copy skills/ai_consult/SKILL.md
-        const destSkillsDir = path.join(destDir, 'skills', 'ai_consult');
-        if (!fs.existsSync(destSkillsDir)) {
-            fs.mkdirSync(destSkillsDir, { recursive: true });
-        }
-        
-        if (fs.existsSync(sourceSkill)) {
-            fs.copyFileSync(sourceSkill, path.join(destSkillsDir, 'SKILL.md'));
+        // Copy all skills recursively
+        if (fs.existsSync(sourceSkills)) {
+            copyDirRecursiveSync(sourceSkills, path.join(destDir, 'skills'));
         }
 
         console.log('LLM Walkie-Talkie global plugin files successfully installed/synchronized.');
