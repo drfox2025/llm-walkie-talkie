@@ -84,7 +84,7 @@ You do not need paid subscriptions to start consulting high-performing models. W
 ## 📦 Installation & Setup
 
 ### Option 1: Automated setup script (Recommended)
-Run the automated installation script, which installs the package dependencies, boots setup prompts for API keys, and copies the custom Antigravity skill:
+Run the automated installation script, which installs the package dependencies, boots setup prompts for API keys, and copies the LWT Antigravity Plugin to your global config directory:
 ```bash
 python install.py
 ```

@@ -32,32 +32,23 @@ def main():
             print(f"[FAIL] Setup failed: {e}")
             sys.exit(1)
 
-    # Step 3: Install Antigravity Custom Skill
-    print("\n[3/3] Installing Antigravity Custom Skill...")
-    choice = input("Do you want to install the 'ai-consult' skill globally for all workspaces? (y/n): ").strip().lower()
+    # Step 3: Install Antigravity Plugin
+    print("\n[3/3] Installing Antigravity Plugin...")
+    choice = input("Do you want to install LWT as an Antigravity Plugin globally? (y/n): ").strip().lower()
     
-    source_skill = Path(__file__).resolve().parent / ".agents" / "skills" / "ai_consult"
+    source_plugin = Path(__file__).resolve().parent / "antigravity-plugin"
     
     if choice == 'y':
-        dest_dir = Path.home() / ".gemini" / "config" / "skills" / "ai_consult"
+        dest_dir = Path.home() / ".gemini" / "config" / "plugins" / "llm-walkie-talkie"
         try:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_skill / "SKILL.md", dest_dir / "SKILL.md")
-            print(f"[OK] Installed globally to {dest_dir}\n")
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            shutil.copytree(source_plugin, dest_dir)
+            print(f"[OK] Installed plugin globally to {dest_dir}\n")
         except Exception as e:
-            print(f"[FAIL] Failed to install globally: {e}")
+            print(f"[FAIL] Failed to install plugin globally: {e}")
     else:
-        workspace_path = input("Enter the absolute path of your active project workspace: ").strip()
-        if workspace_path:
-            dest_dir = Path(workspace_path) / ".agents" / "skills" / "ai_consult"
-            try:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_skill / "SKILL.md", dest_dir / "SKILL.md")
-                print(f"[OK] Installed to workspace at {dest_dir}\n")
-            except Exception as e:
-                print(f"[FAIL] Failed to install to workspace: {e}")
-        else:
-            print("Skipped skill installation.\n")
+        print("Skipped plugin installation.\n")
 
     print("====================================================")
     print(" Setup Completed Successfully!")
