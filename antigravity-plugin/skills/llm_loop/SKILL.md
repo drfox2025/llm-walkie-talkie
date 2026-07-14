@@ -9,7 +9,14 @@ Use this skill when you want to achieve a complex, design-critical code implemen
 
 ## Instructions
 
-1. **Establish the Design Contract First**:
+0. **Verify Connections to External LLMs First (Run once per session)**:
+   - Before executing the loop, check provider connectivity and credentials to ensure they are active:
+     ```bash
+     walkie status                      # Check active providers
+     walkie status --sweep              # Live latency probe (if connection issues suspected)
+     ```
+
+1. **Establish the Design Contract**:
    - Before editing any code or UI components, ensure that a `theme.contract.yaml` exists in the workspace.
    - If one does not exist, establish the design variables (color scale, spacing scale, canonical component imports) and get approval before proceeding.
 
