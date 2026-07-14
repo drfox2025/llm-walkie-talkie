@@ -1,7 +1,7 @@
 {
   "name": "llm-walkie-talkie",
   "displayName": "LLM Walkie-Talkie",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "drfox2025",
   "description": "Consult external LLMs directly from Antigravity IDE. Saves native token usage and enables surgical codebase patching.",
   "icon": "logo.png",

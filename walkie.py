@@ -2142,7 +2142,15 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
             # 2. RED TEAM (Adversarial critique)
             click.echo("[RED TEAM] Searching for concrete reproducible defects...")
             rt_messages = [
-                {"role": "system", "content": "You are an adversarial Red Team critic. Locate reproducible defects in the code relative to the Design Contract and goal."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an adversarial Red Team critic. Locate reproducible defects in the project's codebase "
+                        "relative to the Design Contract and user's goal. Focus your criticism on logic flaws, styling issues, "
+                        "functional bugs, and test failures in the project files. Do NOT criticize a lack of LLM connections "
+                        "or external API integrations unless they are explicitly part of the user's goal."
+                    )
+                },
                 {"role": "user", "content": f"Goal: {goal}\nModified Files:\n" + "\n".join(f"--- File: {k} ---\n{v[:4000]}" for k, v in modified_files.items()) + f"\n\nStop Command Output:\n{stop_output[:2000]}\nOutput a JSON object with: 'defect_found' (bool), 'description' (string), 'reproducible_case' (string), 'amendment_proposal' (optional dictionary of missing contract tokens to merge under 'tokens')."}
             ]
             try:
@@ -2176,7 +2184,17 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
 >>>>
 """
             imp_messages = [
-                {"role": "system", "content": "You are a professional software builder. Implement fixes following the Design Contract exactly."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a professional software builder. Your job is to implement concrete, logical, and style-compliant "
+                        "changes directly within the project's source code files to achieve the user's stated goal.\n"
+                        "CRITICAL DIRECTIVE: You must focus exclusively on modifying the actual codebase of the project "
+                        "in the workspace. Do NOT implement external LLM API clients, do NOT try to connect to other LLMs, "
+                        "and do NOT write mock AI integrations unless the goal specifically requests it. Your changes must "
+                        "directly fix the codebase logic, styling, and tests to make the stop command pass."
+                    )
+                },
                 {"role": "user", "content": imp_prompt}
             ]
 
@@ -2251,7 +2269,14 @@ JSON output only containing:
   "amendment_proposal": "optional dictionary of proposed Design Contract token changes to merge under 'tokens'"
 }}"""
             aud_messages = [
-                {"role": "system", "content": "You are a Design Contract Auditor. Check conformance to style scales and component usages."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a Design Contract Auditor. Evaluate the project files for conformance to style scales, "
+                        "component usages, and the user's functional goal. Verify that the implemented changes directly improve "
+                        "the project's codebase, and do not suggest external LLM integrations or mock connections unless requested by the goal."
+                    )
+                },
                 {"role": "user", "content": aud_prompt}
             ]
             try:

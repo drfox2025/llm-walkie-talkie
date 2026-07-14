@@ -26,3 +26,8 @@ Use this skill when you want to achieve a complex, design-critical code implemen
 4. **Mandatory Token & Cost Report**:
    - Every execution of the loop must produce a final transparent token count and estimated USD cost report, detailing per-model, per-role, and per-iteration breakdowns, clearly divided by the Native LLM (Implementer) and the External LLMs (Auditor & Red Team).
 
+5. **Focus on the Local Project Codebase**:
+   - Your primary target is to modify and implement changes directly within the local project files (e.g. backend, frontend, UI, logic, tests) in the workspace.
+   - Do NOT try to connect to other LLMs, install API clients, or build mock LLM integrations unless the user's goal explicitly specifies it.
+
+
