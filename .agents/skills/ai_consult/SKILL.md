@@ -11,21 +11,59 @@ This skill instructs you (the IDE agent) on how to delegate complex coding, debu
 
 ---
 
-## Top 3 Free Coding Models (Live-Discovered, July 2026)
+## Discovering Available Free Models (Run Once Per Session)
 
-These are the best available models confirmed via `walkie discover --coding-only`:
+Before selecting a model, run discovery to get the **live** list of free coding models:
+```bash
+walkie discover --coding-only
+```
 
-| # | Canonical Name | Full Model ID | Context | Tags | Routes |
-|---|---|---|---|---|---|
-| 1 | `qwen3-coder` | `openrouter/qwen/qwen3-coder:free` | **1048K** | coding, reasoning | OpenRouter |
-| 2 | `laguna-m.1` | `openrouter/poolside/laguna-m.1:free` | 262K | coding, reasoning | OpenRouter |
-| 3 | `nemotron-3-ultra-550b-a55b` | `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` | **1000K** | reasoning | OpenRouter + NVIDIA |
+This lists all free coding models with context lengths, provider routes, and tags. Pick the best model based on:
+- **Context length**: Prefer ≥262K for large file refactoring
+- **Tags**: Prefer models tagged `coding` + `reasoning`
+- **Routes**: Models with 2+ routes have automatic failover
 
-**All 3 are FREE** — they require only an `OPENROUTER_API_KEY` (free at https://openrouter.ai/keys).
+For JSON output (programmatic use): `walkie discover --coding-only --json-output`
+To bypass 24h cache: `walkie discover --coding-only --force`
 
-*(Note: These free models are optimized for single-call 'consult' operations. To run a 'loop', ensure you use 3 distinct model vendors to satisfy the Start Guard)*
+**All discovered free models** require only a free API key from their provider (no credit card).
 
-**Multi-route bonus**: `qwen3-next-80b-a3b` and `gpt-oss-120b` are also available on BOTH OpenRouter and NVIDIA NIM simultaneously — the failover system will automatically use both.
+*(Note: Free models are optimized for single-call 'consult' operations. To run a 'loop', ensure you use 3 distinct model vendors to satisfy the Start Guard.)*
+
+---
+
+## Pre-Flight: Ensuring Provider Connectivity
+
+Before attempting any `walkie consult` or `walkie ask` command, check if at least one provider is configured:
+
+```bash
+walkie status
+```
+
+If ALL providers show `[GREY] No key`, guide the user through setup:
+
+1. **Recommend the fastest path**: Tell the user:
+   *"You need at least one free API key. The fastest option is OpenRouter — it gives you access to 50+ free models with no credit card required."*
+
+2. **Run the quickstart wizard**:
+   ```bash
+   walkie quickstart
+   ```
+
+3. **If the user wants more providers**: Run the full setup:
+   ```bash
+   walkie setup --provider nvidia      # For NVIDIA NIM (40 RPM free tier)
+   walkie setup --provider zenmux      # For ZenMux (GLM 5.2 access)
+   walkie setup --provider groq        # For Groq (ultra-low latency)
+   walkie setup --provider openrouter  # For OpenRouter (50+ free models)
+   ```
+
+4. **After setup succeeds**: Run discovery to confirm available models:
+   ```bash
+   walkie discover --coding-only
+   ```
+
+**IMPORTANT**: Never assume a provider is configured. Always check `walkie status` output before your first `consult` call in a session. If the status shows unconfigured providers, proactively inform the user which free options are available.
 
 ---
 

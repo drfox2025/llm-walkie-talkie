@@ -22,50 +22,6 @@ except Exception:
     LOG_DIR = CONFIG_DIR / 'logs'
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-
-SESSION_DIR = CONFIG_DIR / 'sessions'
-SESSION_MAX_TURNS = 20          # hard cap stored on disk
-SESSION_INJECT_TURNS = 6        # how many recent turns to inject into prompt
-SESSION_DIFF_CHAR_CAP = 400     # reuse your chain-diff cap
-
-def _session_path(session_id: str) -> Path:
-    safe = re.sub(r'[^\w.\-]+', '-', session_id)[:80]
-    return SESSION_DIR / f"{safe}.json"
-
-def load_session(session_id: str) -> Optional[Dict[str, Any]]:
-    p = _session_path(session_id)
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding='utf-8'))
-    except Exception as e:
-        click.secho(f"Warning: Could not read session: {safe_error_handler(e)}", fg="yellow", err=True)
-        return None
-
-def save_session(session_id: str, data: dict) -> None:
-    try:
-        SESSION_DIR.mkdir(parents=True, exist_ok=True)
-        data['updated'] = datetime.datetime.now().isoformat()
-        # LRU trim
-        if 'turns' in data:
-            data['turns'] = data['turns'][-SESSION_MAX_TURNS:]
-        if 'messages' in data:
-            # Note: SESSION_MAX_TURNS represents individual message entries here,
-            # so an exchange (user+assistant) consumes 2 turns. This means
-            # a cap of 20 equates to ~10 conversational exchanges.
-            if data['messages'] and data['messages'][0].get('role') == 'system':
-                data['messages'] = [data['messages'][0]] + data['messages'][-(SESSION_MAX_TURNS-1):]
-            else:
-                data['messages'] = data['messages'][-SESSION_MAX_TURNS:]
-        p = _session_path(session_id)
-        tmp = p.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(data, indent=2), encoding='utf-8')
-        if os.name != 'nt':
-            os.chmod(tmp, 0o600)
-        tmp.replace(p)   # atomic
-    except Exception as e:
-        click.secho(f"Warning: Could not save session: {safe_error_handler(e)}", fg="yellow", err=True)
-
 env_path = CONFIG_DIR / '.env'
 if env_path.exists():
     load_dotenv(dotenv_path=env_path)
@@ -97,23 +53,112 @@ if env_path.exists() and os.name != 'nt':
     except Exception:
         pass
 
+
+SESSION_DIR = CONFIG_DIR / 'sessions'
+def _safe_int_env(env_var: str, default: int, min_val: int = 1, max_val: int = 1000) -> int:
+    """Parse integer env var with bounds checking."""
+    try:
+        val = int(os.environ.get(env_var, str(default)))
+        return max(min_val, min(val, max_val))
+    except (ValueError, TypeError):
+        return default
+
+SESSION_MAX_TURNS = _safe_int_env("SESSION_MAX_TURNS", 20, min_val=1, max_val=500)          # hard cap stored on disk
+SESSION_INJECT_TURNS = _safe_int_env("SESSION_INJECT_TURNS", 6, min_val=1, max_val=100)        # how many recent turns to inject into prompt
+SESSION_DIFF_CHAR_CAP = _safe_int_env("SESSION_DIFF_CHAR_CAP", 400, min_val=100, max_val=10000)     # reuse your chain-diff cap
+
+
+def _session_path(session_id: str) -> Path:
+    safe = re.sub(r'[^\w.\-]+', '-', session_id)[:80]
+    return SESSION_DIR / f"{safe}.json"
+
+
+def load_session(session_id: str) -> Optional[Dict[str, Any]]:
+    p = _session_path(session_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception as e:
+        click.secho(f"Warning: Could not read session: {safe_error_handler(e)}", fg="yellow", err=True)
+        return None
+
+
+def save_session(session_id: str, data: dict) -> None:
+    try:
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        data['updated'] = datetime.datetime.now().isoformat()
+        # LRU trim
+        if 'turns' in data:
+            data['turns'] = data['turns'][-SESSION_MAX_TURNS:]
+        if 'messages' in data:
+            # Note: SESSION_MAX_TURNS represents individual message entries here,
+            # so an exchange (user+assistant) consumes 2 turns. This means
+            # a cap of 20 equates to ~10 conversational exchanges.
+            if data['messages'] and data['messages'][0].get('role') == 'system':
+                data['messages'] = [data['messages'][0]] + data['messages'][-(SESSION_MAX_TURNS-1):]
+            else:
+                data['messages'] = data['messages'][-SESSION_MAX_TURNS:]
+        p = _session_path(session_id)
+        if os.environ.get("WALKIE_ATOMIC_WRITES") != "0":
+            tmp = p.with_suffix('.json.tmp')
+            tmp.write_text(json.dumps(data, indent=2), encoding='utf-8')
+            if os.name != 'nt':
+                os.chmod(tmp, 0o600)
+            tmp.replace(p)   # atomic
+        else:
+            p.write_text(json.dumps(data, indent=2), encoding='utf-8')
+            if os.name != 'nt':
+                os.chmod(p, 0o600)
+    except Exception as e:
+        click.secho(f"Warning: Could not save session: {safe_error_handler(e)}", fg="yellow", err=True)
+
+
 PROVIDERS = {
     "ZENMUX": {
         "env_var": "ZENMUX_API_KEY",
         "description": "ZenMux API Key (provides free GLM 5.2 and others)",
         "test_model": "zenmux/glm-4",
-        "api_base": "https://zenmux.ai/api/v1"
+        "api_base": "https://zenmux.ai/api/v1",
+        "pattern": r"^sk-ai-v1-[a-zA-Z0-9_-]{20,}$",
+        "url": "https://zenmux.ai",
+        "free_tier": True,
+        "blurb": "ZenMux provides free access to GLM 5.2 and Fable models.",
+        "steps": [
+            "Sign up or log in at https://zenmux.ai (no credit card required).",
+            "Navigate to the API Keys section in your dashboard.",
+            "Click 'Create API Key' and copy your key (starts with sk-ai-v1-).",
+        ],
     },
     "NVIDIA": {
         "env_var": "NVIDIA_API_KEY",
         "description": "NVIDIA API Key (NIM integration gateway)",
         "test_model": "nvidia/z-ai/glm-5.2",
-        "api_base": "https://integrate.api.nvidia.com/v1"
+        "api_base": "https://integrate.api.nvidia.com/v1",
+        "pattern": r"^nvapi-[a-zA-Z0-9_-]{40,}$",
+        "url": "https://build.nvidia.com",
+        "free_tier": True,
+        "blurb": "NVIDIA NIM provides free GPU-hosted models (40 RPM free tier).",
+        "steps": [
+            "Sign in or create a free NVIDIA Developer account.",
+            "Browse to 'Models' > choose any model (e.g., GLM-5.2).",
+            "Click 'Get API Key' \u2014 select a model endpoint if prompted.",
+            "Copy your key (starts with nvapi-). It is valid for 90 days.",
+        ],
     },
     "GROQ": {
         "env_var": "GROQ_API_KEY",
         "description": "Groq API Key (fast Llama 3 / Mixtral)",
         "test_model": "groq/llama3-8b-8192",
+        "pattern": r"^gsk_[a-zA-Z0-9_-]{40,}$",
+        "url": "https://console.groq.com/keys",
+        "free_tier": True,
+        "blurb": "Groq provides ultra-low-latency inference for Llama 3 and Mixtral (free tier).",
+        "steps": [
+            "Sign in or create a free account at https://console.groq.com (no credit card).",
+            "Navigate to 'API Keys' in the left sidebar.",
+            "Click 'Create API Key', name it, and copy the key (starts with gsk_).",
+        ],
     },
     "OPENROUTER": {
         "env_var": "OPENROUTER_API_KEY",
@@ -126,55 +171,49 @@ PROVIDERS = {
             "Get key at: https://openrouter.ai/keys"
         ),
         "test_model": "openrouter/qwen/qwen3-coder:free",
-        "api_base": "https://openrouter.ai/api/v1"
+        "api_base": "https://openrouter.ai/api/v1",
+        "pattern": r"^sk-or-[a-zA-Z0-9-_]{40,}$",
+        "url": "https://openrouter.ai/keys",
+        "free_tier": True,
+        "blurb": "OpenRouter gives you access to 50+ free models with no credit card.",
+        "steps": [
+            "Sign in with Google, GitHub, or email (no credit card needed).",
+            "Click 'Create Key' on the API Keys page.",
+            "Copy the key (starts with sk-or-).",
+        ],
     },
     "GEMINI": {
         "env_var": "GEMINI_API_KEY",
         "description": "Google Gemini API Key",
         "test_model": "gemini/gemini-1.5-flash",
+        "pattern": r"^AIzaSy[a-zA-Z0-9_-]{33}$",
+        "url": "https://aistudio.google.com/app/apikey",
+        "free_tier": False,
+        "blurb": "",
+        "steps": [],
     },
     "OPENAI": {
         "env_var": "OPENAI_API_KEY",
         "description": "OpenAI API Key",
         "test_model": "openai/gpt-3.5-turbo",
+        "pattern": r"^sk-[a-zA-Z0-9_-]{20,}$",
+        "url": "https://platform.openai.com/api-keys",
+        "free_tier": False,
+        "blurb": "",
+        "steps": [],
     },
     "ANTHROPIC": {
         "env_var": "ANTHROPIC_API_KEY",
         "description": "Anthropic API Key",
         "test_model": "anthropic/claude-3-haiku-20240307",
+        "pattern": r"^sk-ant-[a-zA-Z0-9-_]{40,}$",
+        "url": "https://console.anthropic.com/settings/keys",
+        "free_tier": False,
+        "blurb": "",
+        "steps": [],
     }
 }
 
-PROVIDER_CONFIG = {
-    "ZENMUX": {
-        "pattern": r"^sk-ai-v1-[a-zA-Z0-9_-]{20,}$",
-        "url": "Visit https://zenmux.ai and navigate to API Keys section."
-    },
-    "NVIDIA": {
-        "pattern": r"^nvapi-[a-zA-Z0-9_-]{40,}$",
-        "url": "Visit https://build.nvidia.com and generate an API key."
-    },
-    "GROQ": {
-        "pattern": r"^gsk_[a-zA-Z0-9_-]{40,}$",
-        "url": "Visit https://console.groq.com/keys to create a key."
-    },
-    "OPENROUTER": {
-        "pattern": r"^sk-or-[a-zA-Z0-9-_]{40,}$",
-        "url": "Visit https://openrouter.ai/keys to create a key."
-    },
-    "GEMINI": {
-        "pattern": r"^AIzaSy[a-zA-Z0-9_-]{33}$",
-        "url": "Visit https://aistudio.google.com/app/apikey to create a key."
-    },
-    "OPENAI": {
-        "pattern": r"^sk-[a-zA-Z0-9_-]{20,}$",
-        "url": "Visit https://platform.openai.com/api-keys to create a key."
-    },
-    "ANTHROPIC": {
-        "pattern": r"^sk-ant-[a-zA-Z0-9-_]{40,}$",
-        "url": "Visit https://console.anthropic.com/settings/keys to create a key."
-    }
-}
 
 @click.group()
 def cli():
@@ -189,7 +228,13 @@ def cli():
         click.secho("[WARM START] No active providers identified. Please run `walkie setup`.", fg="yellow", err=True)
 
 
-def health_ok(model: str, ttl=3600):
+def health_ok(model: str, ttl=None):
+    if ttl is None:
+        try:
+            ttl_hours = float(os.environ.get("LWT_DISCOVERY_TTL_HOURS", "1.0"))
+            ttl = int(ttl_hours * 3600)
+        except Exception:
+            ttl = 3600
     p = CONFIG_DIR / "health.json"
     try:
         data = json.loads(p.read_text())
@@ -216,7 +261,7 @@ def write_health(model: str, ok: bool):
 @click.option('--model', '-m', default="nvidia/z-ai/glm-5.2", help="Model to probe.")
 def health(model):
     """Check connection health with TTL caching."""
-    if health_ok(model, 3600):
+    if health_ok(model):
         click.secho("[OK] Connection cached (fresh).", fg="green")
         sys.exit(0)
 
@@ -231,7 +276,10 @@ def health(model):
         sys.exit(1)
 
 @cli.command()
-def setup():
+@click.option("--provider", "-p", default=None,
+              type=click.Choice([p.lower() for p in PROVIDERS], case_sensitive=False),
+              help="Configure only a specific provider (skip all others).")
+def setup(provider):
     """Interactive wizard to configure Walkie-Talkie API keys."""
     click.secho("LLM Walkie-Talkie Setup", fg="cyan", bold=True)
     click.echo("API Keys will be masked as you type them and validated against expected formats.\n")
@@ -241,28 +289,34 @@ def setup():
         if os.name != 'nt':
             os.chmod(env_path, 0o600)
 
-    for provider, info in PROVIDERS.items():
+    filter_provider = provider.upper() if provider else None
+
+    for prov_name, info in PROVIDERS.items():
+        if filter_provider and prov_name != filter_provider:
+            continue
+
         env_var = info["env_var"]
         current_val = os.getenv(env_var)
-        cfg = PROVIDER_CONFIG.get(provider, {})
 
-        click.secho(f"--- Configure {provider} ---", fg="blue", bold=True)
+        click.secho(f"--- Configure {prov_name} ---", fg="blue", bold=True)
 
-        # NVIDIA: offer step-by-step wizard before prompting for key
-        if provider == "NVIDIA" and not current_val:
-            click.echo("NVIDIA NIM provides free GPU-hosted models (40 RPM free tier).")
-            click.echo("To get your free nvapi- key:")
-            if click.confirm("  Open the NVIDIA developer portal in your browser now?", default=True):
-                import webbrowser
-                webbrowser.open("https://build.nvidia.com")
+        # Data-driven registration wizard for providers with step-by-step guides
+        if info.get("steps") and not current_val:
+            blurb = info.get("blurb", "")
+            if blurb:
+                click.echo(blurb)
+            click.echo(f"To get your free API key:")
+            portal_url = info.get("url", "")
+            if portal_url:
+                if click.confirm(f"  Open {prov_name} in your browser now?", default=True):
+                    import webbrowser
+                    webbrowser.open(portal_url)
             click.echo("")
-            click.echo("  Step 1: Sign in or create a free NVIDIA Developer account.")
-            click.echo("  Step 2: Browse to 'Models' > choose any model (e.g., GLM-5.2).")
-            click.echo("  Step 3: Click 'Get API Key' — select a model endpoint if prompted.")
-            click.echo("  Step 4: Copy your key (starts with nvapi-). It is valid for 90 days.")
+            for i, step in enumerate(info["steps"], 1):
+                click.echo(f"  Step {i}: {step}")
             click.echo("")
-        elif cfg.get("url"):
-            click.echo(f"Help URL: {cfg['url']}")
+        elif info.get("url"):
+            click.echo(f"Help URL: {info['url']}")
 
         if current_val:
             click.echo(f"Current key is set (starts with {current_val[:6]}...)")
@@ -273,9 +327,9 @@ def setup():
         new_key = click.prompt(f"Enter {env_var}", default="", show_default=False, hide_input=True)
         new_key = new_key.strip()
         if new_key:
-            pattern = cfg.get("pattern")
+            pattern = info.get("pattern")
             if pattern and not re.match(pattern, new_key):
-                click.secho(f"Note: The entered key does not match the typical pattern for {provider}.", fg="yellow")
+                click.secho(f"Note: The entered key does not match the typical pattern for {prov_name}.", fg="yellow")
                 if not click.confirm("Do you want to save it anyway?", default=False):
                     click.echo("Skipping key saving.")
                     continue
@@ -284,46 +338,159 @@ def setup():
                 set_key(env_path, env_var, new_key)
                 os.environ[env_var] = new_key
             except Exception as e:
-                click.secho(f"Error saving key for {provider}: {str(e)}", fg="red", err=True)
+                click.secho(f"Error saving key for {prov_name}: {str(e)}", fg="red", err=True)
                 continue
 
-            click.echo(f"Verifying {provider} connection...")
+            click.echo(f"Verifying {prov_name} connection...")
             try:
                 model = info["test_model"]
                 call_llm(model=model, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, no_log=True)
-                click.secho(f"[OK] Success! {provider} is working.", fg="green")
+                click.secho(f"[OK] Success! {prov_name} is working.", fg="green")
 
                 # Auto-discover models for this provider after successful setup
-                click.secho(f"[SCAN] Discovering available models on {provider}...", fg="cyan")
+                click.secho(f"[SCAN] Discovering available models on {prov_name}...", fg="cyan")
                 try:
                     import discovery as disc
                     registry, _ = disc.run_discovery(force=True)
-                    prov_upper = provider.upper()
+                    prov_upper = prov_name.upper()
                     prov_models = [
                         (c, e) for c, e in disc.rank_free_models(registry, use_case="coding")
                         if any(r["provider"] == prov_upper for r in e.get("routes", []))
                     ][:5]
                     if prov_models:
-                        click.echo(f"  Top models available on {provider}:")
-                        for canonical, entry in prov_models:
-                            tags = ", ".join(entry.get("tags", [])[:2])
-                            routes = [r for r in entry["routes"] if r["provider"] == prov_upper]
-                            ctx = max((r.get("context_length") or 0) for r in routes)
-                            ctx_str = f"{ctx // 1000}K" if ctx >= 1000 else "-"
-                            click.echo(f"    • {canonical:<22} ctx={ctx_str:<6} [{tags}]")
+                        _display_top_models(prov_models, title=f"  Top models available on {prov_name}:", show_providers=False)
                     else:
                         click.echo("  No free models found for this provider yet.")
                 except Exception:
                     pass  # discovery failure is non-fatal
 
             except Exception as e:
-                click.secho(f"[NO] Failed to verify {provider}: {str(e)}", fg="red")
+                click.secho(f"[NO] Failed to verify {prov_name}: {str(e)}", fg="red")
 
     if os.name != 'nt' and env_path.exists():
         os.chmod(env_path, 0o600)
     click.secho("\nSetup complete!", fg="green")
     click.secho("Tip: Run `walkie discover --coding-only` to see all available free models.", fg="cyan")
     click.secho("Tip: Run `walkie status` to see connection status for all providers.", fg="cyan")
+
+def _display_top_models(models, *, title="Top free coding models:", show_providers=True):
+    """Render a formatted list of top free coding models to the terminal."""
+    if not models:
+        return
+    click.secho(title, fg="cyan", bold=True)
+    for canonical, entry in models:
+        tags = ", ".join(entry.get("tags", [])[:2])
+        routes = entry.get("routes", [])
+        ctx = max((r.get("context_length") or 0) for r in routes) if routes else 0
+        ctx_str = f"{ctx // 1000}K" if ctx >= 1000 else "-"
+        line = f"  \u2022 {canonical:<25} ctx={ctx_str:<6} [{tags}]"
+        if show_providers and routes:
+            provs = ", ".join(sorted({r["provider"] for r in routes}))
+            line += f"  via {provs}"
+        click.echo(line)
+
+
+@cli.command()
+def quickstart():
+    """Zero-friction setup: configure one free provider and start coding in 30 seconds."""
+    # Check if any provider is already configured
+    active_provs = [
+        name for name, info in PROVIDERS.items()
+        if os.getenv(info["env_var"])
+    ]
+    if active_provs:
+        click.secho(f"[OK] Already configured: {', '.join(active_provs)}", fg="green")
+        click.echo("Running model discovery...\n")
+        try:
+            import discovery as disc
+            registry, _ = disc.run_discovery(force=True)
+            coding = disc.rank_free_models(registry, use_case="coding", configured_only=True)[:5]
+            _display_top_models(coding, title="Top free coding models available to you:", show_providers=True)
+            click.echo("")
+            click.secho("You're ready! Try:", fg="green")
+            if coding:
+                first_model = coding[0][1]["routes"][0]["model_id"] if coding[0][1].get("routes") else "openrouter/qwen/qwen3-coder:free"
+                click.echo(f'  walkie ask -m {first_model} --prompt "Hello"')
+            else:
+                click.echo('  walkie ask --prompt "Hello"')
+        except Exception:
+            click.secho("Discovery failed. Try: walkie discover --coding-only", fg="yellow")
+        return
+
+    # No provider configured — guide through OpenRouter (fastest free path)
+    click.echo("")
+    click.secho("╔══════════════════════════════════════════════════════╗", fg="cyan", bold=True)
+    click.secho("║  Quick Start: Get coding in 30 seconds              ║", fg="cyan", bold=True)
+    click.secho("╠══════════════════════════════════════════════════════╣", fg="cyan", bold=True)
+    click.secho("║  OpenRouter gives you 50+ free models instantly.    ║", fg="cyan")
+    click.secho("║  No credit card. No rate limits on free models.     ║", fg="cyan")
+    click.secho("║                                                     ║", fg="cyan")
+    click.secho("║  Top free coding models you'll unlock:              ║", fg="cyan")
+    click.secho("║   1. qwen3-coder   (1M context, coding+reasoning)  ║", fg="cyan")
+    click.secho("║   2. laguna-m.1    (262K context, coding+reasoning) ║", fg="cyan")
+    click.secho("║   3. nemotron-3    (1M context, reasoning)          ║", fg="cyan")
+    click.secho("╚══════════════════════════════════════════════════════╝", fg="cyan", bold=True)
+    click.echo("")
+
+    click.echo("  Step 1: Open OpenRouter and sign in (Google/GitHub/email).")
+    click.echo("  Step 2: Click 'Create Key' on the API Keys page.")
+    click.echo("  Step 3: Copy the key (starts with sk-or-) and paste below.")
+    click.echo("")
+
+    if click.confirm("Open https://openrouter.ai/keys in your browser now?", default=True):
+        import webbrowser
+        webbrowser.open("https://openrouter.ai/keys")
+
+    new_key = click.prompt("Paste your OpenRouter API key (sk-or-...)", default="", show_default=False, hide_input=True)
+    new_key = new_key.strip()
+    if not new_key:
+        click.secho("No key entered. Run `walkie quickstart` again when ready.", fg="yellow")
+        return
+
+    pattern = PROVIDERS["OPENROUTER"]["pattern"]
+    if not re.match(pattern, new_key):
+        click.secho("Warning: Key does not match expected sk-or- pattern.", fg="yellow")
+        if not click.confirm("Save anyway?", default=False):
+            return
+
+    # Save the key
+    if not env_path.exists():
+        env_path.touch()
+        if os.name != 'nt':
+            os.chmod(env_path, 0o600)
+    set_key(env_path, "OPENROUTER_API_KEY", new_key)
+    os.environ["OPENROUTER_API_KEY"] = new_key
+    click.secho("[OK] Key saved!", fg="green")
+
+    # Verify connectivity
+    click.echo("Verifying connection...")
+    try:
+        call_llm(
+            model=PROVIDERS["OPENROUTER"]["test_model"],
+            messages=[{"role": "user", "content": "Hi"}],
+            max_tokens=5, no_log=True,
+        )
+        click.secho("[OK] OpenRouter is working!", fg="green")
+    except Exception as e:
+        click.secho(f"[WARN] Connection test failed: {e}", fg="yellow")
+        click.echo("The key was saved. You can retry with: walkie status --sweep")
+
+    # Run discovery
+    click.echo("\nDiscovering available models...")
+    try:
+        import discovery as disc
+        registry, diff = disc.run_discovery(force=True)
+        coding = disc.rank_free_models(registry, use_case="coding", configured_only=True)[:5]
+        _display_top_models(coding, title="\nTop free coding models now available:", show_providers=False)
+    except Exception:
+        pass
+
+    click.echo("")
+    click.secho("You're ready! Try:", fg="green", bold=True)
+    click.echo('  walkie ask -m openrouter/qwen/qwen3-coder:free --prompt "Hello, world!"')
+    click.echo("")
+    click.secho("Want more providers? Run: walkie setup", fg="cyan")
+
 
 def _strip_comments(code: str, file_ext: str) -> str:
     """
@@ -448,7 +615,13 @@ def _strip_comments(code: str, file_ext: str) -> str:
             non_empty_lines.append(line)
         elif len(non_empty_lines) > 0 and non_empty_lines[-1] != "":
             non_empty_lines.append("")
-    return "\n".join(non_empty_lines).strip()
+    
+    res = "\n".join(non_empty_lines)
+    had_trailing = "".join(result).endswith("\n") or code.endswith("\n")
+    res = res.strip()
+    if had_trailing:
+        res += "\n"
+    return res
 _KEY_PATTERNS = [
     re.compile(r"sk-ai-v1-[a-zA-Z0-9_-]{10,}"),
     re.compile(r"nvapi-[a-zA-Z0-9_-]{10,}"),
@@ -809,10 +982,13 @@ def log_interaction(
 
     # Scrub any API key values that may appear in prompts or errors
     try:
-        from discovery import mask_keys as _mask_keys
-        full_prompt_safe = _mask_keys(full_prompt)
-        system_safe = _mask_keys(system or "")
-        reply_safe = _mask_keys(reply or "")
+        if os.environ.get("WALKIE_MASK_KEYS") != "0":
+            from discovery import mask_keys as _mask_keys
+            full_prompt_safe = _mask_keys(full_prompt)
+            system_safe = _mask_keys(system or "")
+            reply_safe = _mask_keys(reply or "")
+        else:
+            full_prompt_safe, system_safe, reply_safe = full_prompt, system or "", reply or ""
     except Exception:
         full_prompt_safe, system_safe, reply_safe = full_prompt, system or "", reply or ""
 
@@ -1033,16 +1209,14 @@ def ask(model, prompt, prompt_file, system, max_tokens, temperature, top_p, extr
 def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, dict]:
     """Single entry for litellm.completion. Returns (reply, usage_dict)."""
     import litellm
-    routed, api_base, api_key = route_model(model)
-    kwargs = {"model": routed, "messages": messages, "timeout": opts.get("timeout", float(os.environ.get("WALKIE_TIMEOUT", 120.0)))}
-    if api_base: kwargs["api_base"] = api_base
-    if api_key: kwargs["api_key"] = api_key
+    if os.environ.get("WALKIE_DEBUG") == "1":
+        litellm.set_verbose = True
+    base_kwargs = {"messages": messages, "timeout": opts.get("timeout", float(os.environ.get("WALKIE_TIMEOUT", 120.0)))}
     for k in ("max_tokens", "temperature", "top_p", "stream", "extra_body", "response_format"):
         if opts.get(k) is not None:
-            kwargs[k] = opts[k]
-    try:
-        resp = litellm.completion(**kwargs)
-        reply = resp.choices[0].message.content or ""
+            base_kwargs[k] = opts[k]
+
+    def _extract_usage(resp):
         usage_data = {}
         if hasattr(resp, 'usage') and resp.usage:
             if hasattr(resp.usage, 'model_dump'):
@@ -1054,13 +1228,82 @@ def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, d
                     usage_data = dict(resp.usage)
                 except Exception:
                     pass
-        return reply, usage_data
+        return usage_data
+
+    # Attempt discovery-based failover routing
+    routes = []
+    if os.environ.get("LWT_FAILOVER") != "0":
+        try:
+            import discovery
+            registry = discovery.load_registry()
+            routes = discovery.resolve_with_fallback(model, registry)
+        except Exception:
+            pass
+
+    if routes:
+        if os.environ.get("LWT_SPOF_WARN") != "0":
+            unique_providers = {r.get("provider") for r in routes if r.get("provider")}
+            if len(unique_providers) == 1:
+                prov = list(unique_providers)[0]
+                click.secho(f"[SPOF WARNING] Single Point of Failure: All resolved failover routes map to the same provider ({prov}).", fg="yellow", err=True)
+        last_err = None
+        for route in routes:
+            kwargs = dict(base_kwargs)
+            kwargs["model"] = route.get("model_id") or model
+            if route.get("api_base"):
+                kwargs["api_base"] = route["api_base"]
+            env_val = os.environ.get(route.get("env_var", ""), "") if route.get("env_var") else ""
+            if env_val:
+                kwargs["api_key"] = env_val
+            else:
+                k = route.get("env_var", "")
+                if not k:
+                    _, _, fallback_key = route_model(model)
+                    if fallback_key:
+                        kwargs["api_key"] = fallback_key
+            start_t = time.time()
+            try:
+                resp = litellm.completion(**kwargs)
+                latency_ms = (time.time() - start_t) * 1000.0
+                try:
+                    discovery.update_route_metrics(registry, route["model_id"], True, latency_ms)
+                    discovery.save_registry(registry)
+                except Exception:
+                    pass
+                reply = resp.choices[0].message.content or ""
+                return reply, _extract_usage(resp)
+            except Exception as e:
+                latency_ms = (time.time() - start_t) * 1000.0
+                try:
+                    discovery.update_route_metrics(registry, route["model_id"], False, latency_ms)
+                    discovery.save_registry(registry)
+                except Exception:
+                    pass
+                msg = str(e).lower()
+                transient = ("429" in msg or "timeout" in msg or "timed out" in msg
+                             or " 5" in msg or "rate limit" in msg or "overloaded" in msg)
+                last_err = e
+                if not transient:
+                    break
+        if last_err is not None:
+            raise RuntimeError(safe_error_handler(last_err)) from None
+
+    # Fallback: static route_model() path
+    routed, fallback_base, fallback_key = route_model(model)
+    kwargs = dict(base_kwargs)
+    kwargs["model"] = routed
+    if fallback_base: kwargs["api_base"] = fallback_base
+    if fallback_key: kwargs["api_key"] = fallback_key
+    try:
+        resp = litellm.completion(**kwargs)
+        reply = resp.choices[0].message.content or ""
+        return reply, _extract_usage(resp)
     except Exception as e:
         raise RuntimeError(safe_error_handler(e)) from None
 
 def extract_patches(reply: str) -> List[Tuple[str, str]]:
     """Extract REPLACEMENT_START / WITH / END blocks from text."""
-    pattern = r"(?:<+|=+)\s*REPLACEMENT_START\s*(?:>+|=+)\n?(.*?)\n?(?:<+|=+)\s*REPLACEMENT_WITH\s*(?:>+|=+)\n?(.*?)\n?(?:<+|=+)\s*REPLACEMENT_END\s*(?:>+|=+)"
+    pattern = r"(?:[<>=]+)\s*REPLACEMENT_START\s*(?:[<>=]+)\n?(.*?)\n?(?:[<>=]+)\s*REPLACEMENT_WITH\s*(?:[<>=]+)\n?(.*?)\n?(?:[<>=]+)\s*REPLACEMENT_END\s*(?:[<>=]+)"
     return re.findall(pattern, reply, re.DOTALL)
 
 def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bool = True) -> Tuple[str, Optional[str]]:
@@ -1121,15 +1364,15 @@ def apply_patches(content: str, patches: List[Tuple[str, str]], *, normalize: bo
 @cli.command()
 @click.argument('file', type=click.Path(exists=True))
 @click.option('--task', '-t', required=True, help="Description of the task/changes required.")
-@click.option('--model', '-m', default="nvidia/z-ai/glm-5.2", help="Model to query (defaults to nvidia/z-ai/glm-5.2).")
+@click.option('--model', '-m', default="nvidia/z-ai/glm-5.2", envvar="LWT_DEFAULT_MODEL", help="Model to query (defaults to nvidia/z-ai/glm-5.2).")
 @click.option('--system', '-s', default="", help="Optional system prompt.")
 @click.option('--attach', '-a', multiple=True, type=click.Path(exists=True), help="Optional multiple attached files.")
 @click.option('--dry-run', is_flag=True, help="Compile changes and show them without saving to disk.")
 @click.option('--no-log', is_flag=True, help="Disable interaction logging.")
-@click.option('--retries', '-r', type=int, default=3, help="Number of automatic self-correction retries if patching fails.")
+@click.option('--retries', '-r', type=int, default=3, envvar="LWT_RETRIES", help="Number of automatic self-correction retries if patching fails.")
 @click.option('--line-range', '-L', help="Line range in format start-end (e.g. 100-150) to target, saving tokens by omitting the rest of the file context.")
-@click.option('--verify-model', '-V', help="Secondary model name to use as an independent code auditor to cross-check patches for hallucinations.")
-@click.option('--chain-model', '-c', multiple=True, help="Sequential models after the primary model to refine changes.")
+@click.option('--verify-model', '-V', envvar="LWT_VERIFY_MODEL", help="Secondary model name to use as an independent code auditor to cross-check patches for hallucinations.")
+@click.option('--chain-model', '-c', multiple=True, envvar="LWT_CHAIN_MODEL", help="Sequential models after the primary model to refine changes.")
 @click.option('--keep-comments', is_flag=True, help="Disable comment stripping (comments are stripped by default).")
 @click.option('--no-experience', is_flag=True, help="Disable experience learning and loading lessons from past sessions.")
 @click.option('--no-context-packet', is_flag=True, help="Disable injection of target-scoped ContextPacket.")
@@ -1154,6 +1397,11 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
     targeted_content = file_content
     file_ext = Path(s_file).suffix.lower().lstrip(".")
 
+    if os.environ.get("LWT_EXPERIENCE") == "0":
+        no_experience = True
+
+    ctx_buf = int(os.environ.get("LWT_CTX_BUFFER_LINES", "5"))
+
     if line_range:
         try:
             start_str, end_str = line_range.split('-')
@@ -1162,8 +1410,8 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             if start_line < 1 or end_line < start_line:
                 raise ValueError("Line numbers must be positive and start_line <= end_line.")
             end_line = min(end_line, len(lines))
-            start_idx = max(0, start_line - 1 - 5)
-            end_idx = min(len(lines), end_line + 5)
+            start_idx = max(0, start_line - 1 - ctx_buf)
+            end_idx = min(len(lines), end_line + ctx_buf)
             targeted_content = "\n".join(lines[start_idx:end_idx])
             click.secho(f"Targeting line range {start_line}-{end_line} (context window size: {end_idx - start_idx} lines)", fg="cyan", err=True)
         except Exception as e:
@@ -1260,8 +1508,8 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
             current_segment = working_content
             if line_range:
                 w_lines = working_content.splitlines()
-                start_idx = max(0, start_line - 1 - 5)
-                end_idx = min(len(w_lines), end_line + 5)
+                start_idx = max(0, start_line - 1 - ctx_buf)
+                end_idx = min(len(w_lines), end_line + ctx_buf)
                 current_segment = "\n".join(w_lines[start_idx:end_idx])
 
             user_prompt = f"Task: {task}\n\nTarget File (Current state after prior chain steps):\n"
@@ -1321,8 +1569,8 @@ def consult(file, task, model, system, attach, dry_run, no_log, retries, line_ra
                 # If we are in line range, only apply inside slice
                 if line_range:
                     w_lines = working_content.splitlines()
-                    start_idx = max(0, start_line - 1 - 5)
-                    end_idx = min(len(w_lines), end_line + 5)
+                    start_idx = max(0, start_line - 1 - ctx_buf)
+                    end_idx = min(len(w_lines), end_line + ctx_buf)
                     segment_content = "\n".join(w_lines[start_idx:end_idx])
 
                     candidate_segment, err = apply_patches(segment_content, patches)
@@ -1804,21 +2052,26 @@ def evolve(context, model):
         click.secho(f"\n[ERROR] Target file {target_file} does not exist.", fg="red")
         return
 
-    click.echo(f"\n[BACKUP] Saving backup of {target_file.name}...")
-    try:
-        backup_path = ev.backup_rules(target_file)
-        click.secho(f"Backup saved to: {backup_path}", fg="green")
-    except Exception as e:
-        click.secho(f"[ERROR] Failed to backup: {e}", fg="red")
-        return
+    backup_path = None
+    if os.environ.get("WALKIE_EVOLVE_BACKUP") != "0":
+        click.echo(f"\n[BACKUP] Saving backup of {target_file.name}...")
+        try:
+            backup_path = ev.backup_rules(target_file)
+            click.secho(f"Backup saved to: {backup_path}", fg="green")
+        except Exception as e:
+            click.secho(f"[ERROR] Failed to backup: {e}", fg="red")
+            return
+    else:
+        click.echo(f"\n[BACKUP] Skipped backup as per WALKIE_EVOLVE_BACKUP setting.")
 
     click.echo("[INJECT] Applying rule...")
     success, msg = ev.inject_rule(target_file, rule["section_anchor"], rule["content"])
 
     if success:
         click.secho(f"[SUCCESS] Rule injected into {target_file.name} under <!-- EVOLVE_SECTION: {rule['section_anchor'].upper()} -->", fg="green")
-        click.secho(f"If this rule breaks things, you can restore by running:", fg="yellow")
-        click.secho(f"  walkie evolve-restore {backup_path.name}", fg="yellow")
+        if backup_path:
+            click.secho(f"If this rule breaks things, you can restore by running:", fg="yellow")
+            click.secho(f"  walkie evolve-restore {backup_path.name}", fg="yellow")
     else:
         click.secho(f"[FAIL] {msg}", fg="red")
 
@@ -1847,6 +2100,15 @@ def evolve_restore(backup_filename):
         click.secho(f"[SUCCESS] Restored {target_path.name} from {backup_filename}", fg="green")
     except Exception as e:
         click.secho(f"[ERROR] {e}", fg="red")
+
+
+def get_provider(model_str: str) -> str:
+    m_lower = model_str.lower()
+    for provider in PROVIDERS:
+        prefix = f"{provider.lower()}/"
+        if m_lower.startswith(prefix):
+            return provider
+    return "UNKNOWN"
 
 def get_vendor(model_str: str) -> str:
     m_lower = model_str.lower()
@@ -1899,6 +2161,50 @@ def validate_contract_schema(contract: dict) -> bool:
     return True
 
 
+def extract_robust_json(text: str) -> dict:
+    """Robustly extract and parse JSON object from text, handling markdown fences and surrounding fluff."""
+    cleaned = text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0]
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```", 1)[1].split("```", 1)[0]
+    
+    cleaned = cleaned.strip()
+    # Try direct parse
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # Use a balanced bracket finder instead of greedy regex
+    brace_depth = 0
+    start_idx = -1
+    for i, ch in enumerate(cleaned):
+        if ch == '{':
+            if brace_depth == 0:
+                start_idx = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and start_idx >= 0:
+                try:
+                    return json.loads(cleaned[start_idx:i+1])
+                except Exception:
+                    # Reset and continue searching
+                    start_idx = -1
+                    brace_depth = 0
+
+    # Fallback to regex if balanced parser failed
+    match = re.search(r'(\{.*\})', cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            pass
+
+    raise ValueError(f"Could not parse valid JSON from output: {text[:200]}...")
+
+
 def parse_loop_patches(reply: str) -> List[Tuple[str, str, str]]:
     """Parse patches from Implementer output.
     Format:
@@ -1918,19 +2224,21 @@ def parse_loop_patches(reply: str) -> List[Tuple[str, str, str]]:
 
 @cli.command("loop")
 @click.option('--goal', required=True, help="User-stated goal to drive the loop.")
-@click.option('--stop-cmd', required=True, help="Command that serves as ground-truth success oracle.")
-@click.option('--design-contract', required=True, help="Path to the design contract YAML.")
-@click.option('--gen-model', default="nvidia/z-ai/glm-5.2", help="Implementer (native LLM).")
-@click.option('--audit-model', default="openrouter/google/gemini-2.5-flash:free", help="Auditor model (different vendor).")
-@click.option('--redteam-model', default="zenmux/anthropic/claude-4-fable", help="Red Team model (different vendor).")
+@click.option('--stop-cmd', required=True, envvar="LWT_LOOP_STOP_CMD", help="Command that serves as ground-truth success oracle.")
+@click.option('--design-contract', required=True, envvar="LWT_LOOP_CONTRACT_PATH", help="Path to the design contract YAML.")
+@click.option('--gen-model', default="nvidia/z-ai/glm-5.2", envvar="LWT_LOOP_GEN_MODEL", help="Implementer (native LLM).")
+@click.option('--audit-model', default="openrouter/google/gemini-2.5-flash:free", envvar="LWT_LOOP_AUDIT_MODEL", help="Auditor model (different vendor).")
+@click.option('--redteam-model', default="zenmux/anthropic/claude-4-fable", envvar="LWT_LOOP_REDTEAM_MODEL", help="Red Team model (different vendor).")
 @click.option('--ui-gates', default="token-lint,component-usage", help="Gates to enforce (comma-separated).")
 @click.option('--sandbox', default="worktree", type=click.Choice(["worktree", "none"]), help="Sandbox isolation mode.")
-@click.option('--max-iterations', default=10, type=int, help="Max iterations before budget stop.")
-@click.option('--cost-cap-usd', default=0.50, type=float, help="USD cost cap.")
-@click.option('--session', required=True, help="Session ID to load/save loop trace.")
+@click.option('--max-iterations', default=10, type=int, envvar="LWT_MAX_ITERATIONS", help="Max iterations before budget stop.")
+@click.option('--cost-cap-usd', default=0.50, type=float, envvar="LWT_COST_CAP_USD", help="USD cost cap.")
+@click.option('--session', required=True, envvar="LWT_LOOP_SESSION_ID", help="Session ID to load/save loop trace.")
 @click.option('--json-output', is_flag=True, help="Output final usage report in structured JSON.")
-def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_model, ui_gates, sandbox, max_iterations, cost_cap_usd, session, json_output):
+@click.option('--iteration-timeout', default=60, type=int, envvar="LWT_LOOP_ITER_TIMEOUT", help="Timeout in seconds for stop command per iteration.")
+def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_model, ui_gates, sandbox, max_iterations, cost_cap_usd, session, json_output, iteration_timeout):
     """Goal-driven, multi-LLM, design-governed looping engine."""
+    import os
     import subprocess
     import tempfile
     import shutil
@@ -1945,10 +2253,20 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
     v_aud = get_vendor(audit_model)
     v_red = get_vendor(redteam_model)
     vendors = {v_gen, v_aud, v_red}
+    fallback_mode = False
     if len(vendors) < 3:
-        click.secho(f"[ERROR] Start guard failed: Loop requires at least 3 distinct vendors to prevent self-preference bias.", fg="red", err=True)
+        click.secho(f"[WARN] Start guard check: Loop requires at least 3 distinct vendors to prevent self-preference bias.", fg="yellow", err=True)
         click.secho(f"Configured vendors: Implementer={v_gen}, Auditor={v_aud}, Red Team={v_red}", fg="yellow", err=True)
-        sys.exit(1)
+        if click.confirm("No external LLMs found for a 3-vendor group. Fall-back to native agent emulation mode? (The primary model will play all three roles via detailed prompting)", default=False):
+            fallback_mode = True
+            audit_model = gen_model
+            redteam_model = gen_model
+            v_aud = v_gen
+            v_red = v_gen
+            click.secho("[FALLBACK] Native agent emulation mode activated. The primary model will play all three roles.", fg="green")
+        else:
+            click.secho("[ERROR] Start guard failed: User rejected fallback mode.", fg="red", err=True)
+            sys.exit(1)
 
     # load Design Contract
     contract_path = Path(design_contract)
@@ -1958,6 +2276,13 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
 
     with open(contract_path, "r", encoding="utf-8") as f:
         contract = yaml.safe_load(f)
+
+    # Resolve sandbox choice from envvar
+    env_sandbox = os.environ.get("LWT_LOOP_SANDBOX")
+    if env_sandbox == "0":
+        sandbox = "none"
+    elif env_sandbox == "1":
+        sandbox = "worktree"
 
     # Create sandbox
     cwd = Path.cwd()
@@ -2088,12 +2413,44 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
             # 1. OBSERVE (Run stop command)
             click.echo("[OBSERVE] Running stop oracle command in sandbox...")
             try:
-                res_stop = subprocess.run(stop_cmd, shell=True, cwd=str(sandbox_path), capture_output=True, text=True, timeout=60.0)
-                stop_code = res_stop.returncode
-                stop_output = res_stop.stdout + "\n" + res_stop.stderr
-            except subprocess.TimeoutExpired:
+                # Spawn stop command in a new process group to prevent orphan processes on timeout
+                import os
+                import signal
+                popen_kwargs = {
+                    "cwd": str(sandbox_path),
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "shell": True
+                }
+                if os.name == 'nt':
+                    # Windows process group creation flag
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                else:
+                    # Unix process group creation session
+                    popen_kwargs["start_new_session"] = True
+
+                proc = subprocess.Popen(stop_cmd, **popen_kwargs)
+                try:
+                    stdout, stderr = proc.communicate(timeout=float(iteration_timeout))
+                    stop_code = proc.returncode
+                    stop_output = (stdout or "") + "\n" + (stderr or "")
+                except subprocess.TimeoutExpired:
+                    # Terminate process group cleanly
+                    if os.name == 'nt':
+                        proc.terminate()
+                        # Windows taskkill /F /T can also be used as fallback but terminate usually works
+                    else:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            pass
+                    proc.communicate()  # Clean buffers
+                    stop_code = -1
+                    stop_output = f"Command timed out after {iteration_timeout}s."
+            except Exception as se:
                 stop_code = -1
-                stop_output = "Command timed out after 60s."
+                stop_output = f"Failed to execute stop command: {se}"
 
             # Scan changed/patched files to evaluate design gates
             modified_files = {}
@@ -2141,22 +2498,90 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
 
             # 2. RED TEAM (Adversarial critique)
             click.echo("[RED TEAM] Searching for concrete reproducible defects...")
+            
+            # Generate Unified Diffs for Red Team and Auditor to optimize tokens
+            import difflib
+            diffs_block = []
+            for rel_f, new_c in modified_files.items():
+                # Try to get original content from sandbox checkout or git commit (via worktree base or sandbox copy)
+                # Since we are in worktree sandbox, the parent directory or git show can retrieve the HEAD state
+                orig_c = ""
+                try:
+                    # Retrieve the original state from git if in git
+                    git_show = subprocess.run(["git", "show", f"HEAD:{rel_f}"], cwd=str(sandbox_path), capture_output=True, text=True)
+                    if git_show.returncode == 0:
+                        orig_c = git_show.stdout
+                except Exception:
+                    pass
+                
+                # Fallback to empty if not found
+                if orig_c is None:
+                    orig_c = ""
+                if new_c is None:
+                    new_c = ""
+                diff = list(difflib.unified_diff(
+                    orig_c.splitlines(keepends=True),
+                    new_c.splitlines(keepends=True),
+                    fromfile=f"a/{rel_f}",
+                    tofile=f"b/{rel_f}",
+                    n=3
+                ))
+                diff_text = "".join(diff)
+                if diff_text:
+                    diffs_block.append(diff_text)
+                else:
+                    # If diff is empty (e.g. Iteration 1 or unmodified), send first 50 lines as quick overview context
+                    lines = new_c.splitlines()
+                    diffs_block.append(f"--- File: {rel_f} (unmodified context preview) ---\n" + "\n".join(lines[:50]) + ("\n..." if len(lines) > 50 else ""))
+
+            unified_diff_content = "\n\n".join(diffs_block)
+
+            # Generate symbol map preview to provide context for auditor/red-team without sending full files
+            symbol_map_summary = ""
+            try:
+                import indexer
+                idx = indexer.build_or_update_symbols_index(sandbox_path, force_walk=False)
+                # Select only modified files symbol summaries
+                symbol_list = []
+                for rel_f in modified_files:
+                    f_info = idx.get('files', {}).get(rel_f, {})
+                    if f_info:
+                        classes = [c.get('name') for c in f_info.get('classes', [])]
+                        funcs = [fn.get('name') for fn in f_info.get('functions', [])]
+                        symbol_list.append(f"- File {rel_f}: Classes={classes}, Functions={funcs}")
+                symbol_map_summary = "Symbol Context Map:\n" + "\n".join(symbol_list)
+            except Exception:
+                pass
+
+            rt_system_prompt = (
+                "You are an adversarial Red Team critic. Locate reproducible defects in the project's codebase "
+                "relative to the Design Contract and user's goal. Focus your criticism on logic flaws, styling issues, "
+                "functional bugs, and test failures in the project files. Do NOT criticize a lack of LLM connections "
+                "or external API integrations unless they are explicitly part of the user's goal."
+            )
+            if fallback_mode:
+                rt_system_prompt += (
+                    "\n\nCRITICAL DIRECTIVE FOR SELF-EMULATION FALLBACK:\n"
+                    "You are emulating an external, independent Red Team. To avoid self-bias, you MUST be exceptionally "
+                    "critical, pedantic, and objective. Actively search for flaws, bugs, or missing items in the proposed changes. "
+                    "Do not assume the code is correct just because you generated it earlier. Your primary goal is to find "
+                    "at least one concrete defect if any exists, and explain how it violates the contract or goal."
+                )
+
             rt_messages = [
                 {
                     "role": "system",
-                    "content": (
-                        "You are an adversarial Red Team critic. Locate reproducible defects in the project's codebase "
-                        "relative to the Design Contract and user's goal. Focus your criticism on logic flaws, styling issues, "
-                        "functional bugs, and test failures in the project files. Do NOT criticize a lack of LLM connections "
-                        "or external API integrations unless they are explicitly part of the user's goal."
-                    )
+                    "content": rt_system_prompt
                 },
-                {"role": "user", "content": f"Goal: {goal}\nModified Files:\n" + "\n".join(f"--- File: {k} ---\n{v[:4000]}" for k, v in modified_files.items()) + f"\n\nStop Command Output:\n{stop_output[:2000]}\nOutput a JSON object with: 'defect_found' (bool), 'description' (string), 'reproducible_case' (string), 'amendment_proposal' (optional dictionary of missing contract tokens to merge under 'tokens')."}
+                {"role": "user", "content": f"Goal: {goal}\nModified Files Unified Diffs:\n{unified_diff_content}\n\n{symbol_map_summary}\n\nStop Command Output:\n{stop_output[:2000]}\nOutput a JSON object with: 'defect_found' (bool), 'description' (string), 'reproducible_case' (string), 'amendment_proposal' (optional dictionary of missing contract tokens to merge under 'tokens')."}
             ]
+            rt_kwargs = {}
+            if fallback_mode:
+                rt_kwargs = {"temperature": 1.0, "top_p": 0.95}
             try:
-                rt_reply, rt_usage = call_llm(redteam_model, rt_messages, response_format={"type": "json_object"})
+                rt_reply, rt_usage = call_llm(redteam_model, rt_messages, response_format={"type": "json_object"}, **rt_kwargs)
                 log_usage(redteam_model, "Red Team", rt_usage)
-                rt_data = json.loads(rt_reply)
+                rt_data = extract_robust_json(rt_reply)
             except Exception as e:
                 rt_data = {"defect_found": False, "description": f"Failed to call Red Team: {e}"}
 
@@ -2198,8 +2623,11 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
                 {"role": "user", "content": imp_prompt}
             ]
 
+            imp_kwargs = {}
+            if fallback_mode:
+                imp_kwargs = {"temperature": 0.3, "top_p": 0.9}
             try:
-                imp_reply, imp_usage = call_llm(gen_model, imp_messages)
+                imp_reply, imp_usage = call_llm(gen_model, imp_messages, **imp_kwargs)
                 log_usage(gen_model, "Implementer", imp_usage)
                 patches = parse_loop_patches(imp_reply)
 
@@ -2210,19 +2638,24 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
                     if not filepath or ("/" not in filepath and "\\" not in filepath and "." not in filepath) or len(filepath) > 100:
                         format_warnings.append(f"Rejected patch block filepath: '{filepath}' does not look like a valid relative path.")
                         continue
-                    target_p = sandbox_path / filepath
+                    target_p = (sandbox_path / filepath).resolve()
+                    try:
+                        target_p.relative_to(sandbox_path.resolve())
+                    except ValueError:
+                        format_warnings.append(f"Rejected patch block: path '{filepath}' escapes sandbox.")
+                        continue
                     if not target_p.exists():
                         format_warnings.append(f"Target file '{filepath}' to patch does not exist in the sandbox.")
                         continue
 
                     orig_content = target_p.read_text(encoding="utf-8")
-                    if original in orig_content:
-                        new_content = orig_content.replace(original, replacement)
+                    new_content, patch_err = apply_patches(orig_content, [(original, replacement)])
+                    if patch_err is None:
                         target_p.write_text(new_content, encoding="utf-8")
                         diff_hashes.append(hashlib.md5(new_content.encode("utf-8")).hexdigest())
                         patched_files_set.add(filepath)
                     else:
-                        format_warnings.append(f"Original block to replace in '{filepath}' not found exactly. Check whitespace/newlines.")
+                        format_warnings.append(f"Patch failed for '{filepath}': {patch_err}")
 
                 if format_warnings:
                     gate_feedback += "\n[patch-errors] The following patches failed to apply:\n" + "\n".join(f"- {w}" for w in format_warnings)
@@ -2235,7 +2668,7 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
                     oscillation_count_diff = 0
                 last_diff_hash = current_diff_hash
 
-                if oscillation_count_diff >= 2:
+                if os.environ.get("LWT_LOOP_OSCILLATION") != "0" and oscillation_count_diff >= 2:
                     click.secho("[STOP] Loop stuck (diff oscillation detected). Discarding sandbox.", fg="yellow")
                     accumulator["outcome"] = "STUCK"
                     break
@@ -2258,8 +2691,11 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
             # 4. PANEL (Auditor Grading)
             click.echo("[PANEL] Requesting Auditor evaluation...")
             aud_prompt = f"""Evaluate the current sandbox implementation against the goal: '{goal}'.
-Modified Files:
-""" + "\n".join(f"--- File: {k} ---\n{v[:4000]}" for k, v in modified_files.items()) + f"""
+Modified Files Unified Diffs:
+{unified_diff_content}
+
+{symbol_map_summary}
+
 JSON output only containing:
 {{
   "violations": ["list of design token or functional errors"],
@@ -2268,21 +2704,34 @@ JSON output only containing:
   "reason": "Detailed critique",
   "amendment_proposal": "optional dictionary of proposed Design Contract token changes to merge under 'tokens'"
 }}"""
+            aud_system_prompt = (
+                "You are a Design Contract Auditor. Evaluate the project files for conformance to style scales, "
+                "component usages, and the user's functional goal. Verify that the implemented changes directly improve "
+                "the project's codebase, and do not suggest external LLM integrations or mock connections unless requested by the goal."
+            )
+            if fallback_mode:
+                aud_system_prompt += (
+                    "\n\nCRITICAL DIRECTIVE FOR SELF-EMULATION FALLBACK:\n"
+                    "You are emulating an external, independent Auditor. To avoid self-bias, you MUST evaluate the proposed patches "
+                    "with strict objectivity. Grade the score strictly based on actual conformance. If there are violations "
+                    "or functional deviations, assign a low score, use the REPAIR verdict, and list the exact reasons. Do not "
+                    "automatically approve the work just because it was generated by the same model."
+                )
+
             aud_messages = [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a Design Contract Auditor. Evaluate the project files for conformance to style scales, "
-                        "component usages, and the user's functional goal. Verify that the implemented changes directly improve "
-                        "the project's codebase, and do not suggest external LLM integrations or mock connections unless requested by the goal."
-                    )
+                    "content": aud_system_prompt
                 },
                 {"role": "user", "content": aud_prompt}
             ]
+            aud_kwargs = {}
+            if fallback_mode:
+                aud_kwargs = {"temperature": 0.1, "top_p": 0.9}
             try:
-                aud_reply, aud_usage = call_llm(audit_model, aud_messages, response_format={"type": "json_object"})
+                aud_reply, aud_usage = call_llm(audit_model, aud_messages, response_format={"type": "json_object"}, **aud_kwargs)
                 log_usage(audit_model, "Auditor", aud_usage)
-                aud_data = json.loads(aud_reply)
+                aud_data = extract_robust_json(aud_reply)
 
                 # Progress tracking via score plateau
                 current_score = aud_data.get("score", 0)
@@ -2292,7 +2741,7 @@ JSON output only containing:
                     oscillation_count_score = 0
                 last_score = current_score
 
-                if oscillation_count_score >= 3:
+                if os.environ.get("LWT_LOOP_OSCILLATION") != "0" and oscillation_count_score >= 3:
                     click.secho("[STOP] Loop stuck (score plateau detected). Discarding sandbox.", fg="yellow")
                     accumulator["outcome"] = "STUCK"
                     break
@@ -2302,6 +2751,8 @@ JSON output only containing:
             # Consensus-gated Contract Amendment (requires both external models)
             rt_amend = (rt_data.get("amendment_proposal") if isinstance(rt_data, dict) else None)
             aud_amend = (aud_data.get("amendment_proposal") if isinstance(aud_data, dict) else None)
+            if (rt_amend or aud_amend) and fallback_mode:
+                click.secho("[WARN] Contract amendment proposal detected, but amendments are disabled during single-model fallback mode to prevent self-amending.", fg="yellow")
             if rt_amend and aud_amend and v_aud != v_red:
                 has_updates = False
                 import copy
@@ -2330,25 +2781,81 @@ JSON output only containing:
                             yaml.safe_dump(contract, f)
                         tmp_contract.replace(contract_path)
 
+                        # Persist contract amendment to experience store
+                        try:
+                            lesson_data = {
+                                "error_type": "design_contract_amendment",
+                                "error_message": f"Amended Design Contract to version {contract['meta']['version']}",
+                                "lesson": f"Consensus amendment to Design Contract: merged tokens {rt_amend} and {aud_amend}",
+                                "confidence": 0.9
+                            }
+                            save_experience(".yaml", lesson_data)
+                        except Exception as ee:
+                            click.secho(f"Warning: Could not save contract amendment to experience store: {ee}", fg="yellow", err=True)
+
             # Re-run stop command right after ACT/verify phase for next iteration or exit validation
             click.echo("[VERIFY] Re-running stop command after repair phase...")
             try:
-                res_stop = subprocess.run(stop_cmd, shell=True, cwd=str(sandbox_path), capture_output=True, text=True, timeout=60.0)
-                stop_code = res_stop.returncode
-                stop_output = res_stop.stdout + "\n" + res_stop.stderr
-            except subprocess.TimeoutExpired:
+                # Spawn stop command in a new process group to prevent orphan processes on timeout
+                import os
+                import signal
+                popen_kwargs = {
+                    "cwd": str(sandbox_path),
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "shell": True
+                }
+                if os.name == 'nt':
+                    # Windows process group creation flag
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                else:
+                    # Unix process group creation session
+                    popen_kwargs["start_new_session"] = True
+
+                proc = subprocess.Popen(stop_cmd, **popen_kwargs)
+                try:
+                    stdout, stderr = proc.communicate(timeout=float(iteration_timeout))
+                    stop_code = proc.returncode
+                    stop_output = (stdout or "") + "\n" + (stderr or "")
+                except subprocess.TimeoutExpired:
+                    # Terminate process group cleanly
+                    if os.name == 'nt':
+                        proc.terminate()
+                    else:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            pass
+                    proc.communicate()  # Clean buffers
+                    stop_code = -1
+                    stop_output = f"Command timed out after {iteration_timeout}s."
+            except Exception as se:
                 stop_code = -1
-                stop_output = "Command timed out after 60s."
+                stop_output = f"Failed to execute stop command: {se}"
 
             # Persist turn info
-            sess_data["turns"].append({
+            turn_entry = {
                 "iteration": it,
                 "score": (aud_data.get("score") if isinstance(aud_data, dict) else 0),
                 "defect_found": (rt_data.get("defect_found") if isinstance(rt_data, dict) else False),
                 "violations": (aud_data.get("violations", []) if isinstance(aud_data, dict) else []),
                 "cumulative_usd_spent": accumulator["total_usd"]
-            })
+            }
+            sess_data["turns"].append(turn_entry)
             save_session(session_id, sess_data)
+
+            # Log turn to JSONL file in real-time
+            try:
+                jsonl_path = SESSION_DIR / f"{session_id}.jsonl"
+                with open(jsonl_path, "a", encoding="utf-8") as jsonl_f:
+                    jsonl_f.write(json.dumps({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "type": "iteration_turn",
+                        "data": turn_entry
+                    }) + "\n")
+            except Exception as e:
+                pass
 
             # Per-iteration wall clock timeout check (max 180s)
             if time.time() - it_start_time > 180.0:
@@ -2361,28 +2868,56 @@ JSON output only containing:
         accumulator["outcome"] = "BUDGET"
 
     # LOOP FINISH / REPORTING
-    click.echo("\n=================================")
-    click.secho(f"Loop completed: {accumulator['outcome']}", fg="cyan", bold=True)
-    click.echo(f"Total Iterations: {accumulator['iterations']}")
-    click.echo(f"Total Cost: ${accumulator['total_usd']:.5f} USD")
+    if os.environ.get("LWT_LOOP_TOKEN_REPORT") != "0":
+        click.echo("\n=================================")
+        click.secho(f"Loop completed: {accumulator['outcome']}", fg="cyan", bold=True)
+        click.echo(f"Total Iterations: {accumulator['iterations']}")
+        click.echo(f"Total Cost: ${accumulator['total_usd']:.5f} USD")
 
-    click.echo("\n[Token & Cost Breakdown]")
-    click.echo("  * By Model:")
-    for m, info in accumulator["models"].items():
-        role_label = "Implementer" if m == gen_model else "External"
-        click.echo(f"    - Model {m} ({role_label}):")
-        click.echo(f"      Input: {info['input']} tokens")
-        click.echo(f"      Output: {info['output']} tokens")
-        click.echo(f"      Cost: ${info['usd']:.5f} USD")
+        click.echo("\n[Token & Cost Breakdown]")
+        click.echo("  * By Model:")
+        for m, info in accumulator["models"].items():
+            role_label = "Implementer" if m == gen_model else "External"
+            click.echo(f"    - Model {m} ({role_label}):")
+            click.echo(f"      Input: {info['input']} tokens")
+            click.echo(f"      Output: {info['output']} tokens")
+            click.echo(f"      Cost: ${info['usd']:.5f} USD")
 
-    click.echo("\n[Role Breakdown]")
-    for role, info in accumulator["roles"].items():
-        click.echo(f"  - {role}: In={info['input']} Out={info['output']} Cost=${info['usd']:.5f} USD")
+        click.echo("\n[Role Breakdown]")
+        for role, info in accumulator["roles"].items():
+            click.echo(f"  - {role}: In={info['input']} Out={info['output']} Cost=${info['usd']:.5f} USD")
 
-    click.echo("\n[Iteration History]")
-    for turn in sess_data.get("turns", []):
-        click.echo(f"  - Iteration {turn['iteration']}: Score={turn.get('score')} Defect={turn.get('defect_found')} CumulativeCostSpent=${turn.get('cumulative_usd_spent', 0.0):.5f} USD")
-    click.echo("=================================\n")
+        click.echo("\n[Iteration History]")
+        for turn in sess_data.get("turns", []):
+            click.echo(f"  - Iteration {turn['iteration']}: Score={turn.get('score')} Defect={turn.get('defect_found')} CumulativeCostSpent=${turn.get('cumulative_usd_spent', 0.0):.5f} USD")
+        click.echo("=================================\n")
+
+    # Write final loop report to session trace
+    sess_data["report"] = {
+        "outcome": accumulator["outcome"],
+        "total_iterations": accumulator["iterations"],
+        "total_cost_usd": accumulator["total_usd"],
+        "models": accumulator["models"],
+        "roles": accumulator["roles"]
+    }
+    save_session(session_id, sess_data)
+
+    # Persist structured JSONL log for real-time streaming trace
+    try:
+        jsonl_path = SESSION_DIR / f"{session_id}.jsonl"
+        # Append latest turn as JSONL or create a new file with iteration details
+        with open(jsonl_path, "a", encoding="utf-8") as jsonl_f:
+            # Write final summary record to JSONL trace
+            jsonl_f.write(json.dumps({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "session_id": session_id,
+                "outcome": accumulator["outcome"],
+                "total_iterations": accumulator["iterations"],
+                "total_cost_usd": accumulator["total_usd"],
+                "models": accumulator["models"]
+            }) + "\n")
+    except Exception as e:
+        click.secho(f"Warning: Could not save JSONL log: {e}", fg="yellow", err=True)
 
     # Copy back patched files to host repository on SUCCESS
     if accumulator["outcome"] == "SUCCESS":
@@ -2423,4 +2958,3 @@ JSON output only containing:
 
 if __name__ == '__main__':
     cli()
-

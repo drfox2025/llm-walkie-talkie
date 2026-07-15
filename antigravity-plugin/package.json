@@ -1,7 +1,7 @@
 {
   "name": "llm-walkie-talkie",
   "displayName": "LLM Walkie-Talkie",
-  "version": "1.0.6",
+  "version": "1.0.9",
   "publisher": "drfox2025",
   "description": "Consult external LLMs directly from Antigravity IDE. Saves native token usage and enables surgical codebase patching.",
   "icon": "logo.png",
@@ -23,5 +23,12 @@
     "url": "https://github.com/drfox2025/llm-walkie-talkie/issues"
   },
   "homepage": "https://github.com/drfox2025/llm-walkie-talkie#readme",
-  "contributes": {}
+  "contributes": {
+    "commands": [
+      {
+        "command": "llm-walkie-talkie.openPreferences",
+        "title": "LWT: Open Preferences & Key Manager"
+      }
+    ]
+  }
 }

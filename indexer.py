@@ -13,7 +13,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Set, Optional
 
-SYMBOLS_INDEX_VERSION = 2
+SYMBOLS_INDEX_VERSION = 3
 CONTEXT_PACKET_MAX_CHARS = 3500
 
 def parse_file_symbols(file_path: Path) -> Dict[str, Any]:
@@ -70,9 +70,21 @@ def parse_file_symbols(file_path: Path) -> Dict[str, Any]:
         # Heuristic JS/TS parser
         import re
         imports = []
-        import_matches = re.findall(r"(?:import\s+.*?\s+from\s+|require\s*\(\s*)['\"]([^'\"]+)['\"]", content)
-        for m in import_matches:
-            imports.append(m)
+        
+        # Standard imports: import ... from 'module'
+        imports.extend(re.findall(r"import\s+.*?\s+from\s+['\"]([^'\"]+)['\"]", content))
+        
+        # Require calls: require('module')
+        imports.extend(re.findall(r"require\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", content))
+        
+        # Dynamic imports: import('module')
+        imports.extend(re.findall(r"import\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", content))
+        
+        # Bare imports: import 'module'
+        imports.extend(re.findall(r"import\s+['\"]([^'\"]+)['\"]", content))
+        
+        # Deduplicate
+        imports = list(set(imports))
 
         functions = []
         func_decls = re.findall(r"function\s+([a-zA-Z0-9_$]+)\s*\(", content)
@@ -90,7 +102,7 @@ def parse_file_symbols(file_path: Path) -> Dict[str, Any]:
 
         return {
             'language': 'javascript' if suffix in ('.js', '.jsx') else 'typescript',
-            'imports': list(set(imports)),
+            'imports': imports,
             'classes': classes,
             'functions': list(set(functions))
         }
@@ -177,9 +189,7 @@ def build_or_update_symbols_index(workspace_root: Path, force_walk: bool = False
     for p in stale_paths:
         del files_cache[p]
         
-    # Rebuild reverse import graph
-    # module_name -> set of file paths that import it
-    # Simplified mapping: map "my_module" to files that import it
+    # Rebuild reverse import graph (raw: import string -> importing files)
     reverse_deps = {}
     for rel_path, data in files_cache.items():
         if data.get('language') not in ('python', 'javascript', 'typescript'):
@@ -191,9 +201,117 @@ def build_or_update_symbols_index(workspace_root: Path, force_walk: bool = False
                 reverse_deps[imp] = []
             if rel_path not in reverse_deps[imp]:
                 reverse_deps[imp].append(rel_path)
+    
+    # Build resolved reverse deps: target_file_rel_path -> set of importing_file_rel_path
+    # First, create a lookup of all files by potential import keys
+    file_lookup = {}  # key -> set of rel_paths
+    for rel_path in current_files:
+        p = Path(rel_path)
+        stem = p.stem
+        # Key: full path without extension
+        no_ext = rel_path[:-len(p.suffix)] if p.suffix else rel_path
+        file_lookup.setdefault(no_ext, set()).add(rel_path)
+        # Key: stem (filename without extension)
+        file_lookup.setdefault(stem, set()).add(rel_path)
+        # Key: @/ alias if under src/
+        if no_ext.startswith('src/'):
+            at_key = '@/'+no_ext[4:]
+            file_lookup.setdefault(at_key, set()).add(rel_path)
+        # Key: parent directory (for index files)
+        # e.g., src/components/index.tsx -> src/components
+        if stem == 'index':
+            parent_key = str(p.parent).replace('\\', '/')
+            if parent_key != '.':
+                file_lookup.setdefault(parent_key, set()).add(rel_path)
+    
+    # Helper to resolve an import string to target file(s)
+    def resolve_import(imp: str, importing_rel: str) -> Set[str]:
+        targets = set()
+        importing_dir = Path(importing_rel).parent
+        
+        # Relative imports
+        if imp.startswith('.'):
+            # Resolve relative to importing file's directory
+            # Normalize path
+            resolved = (importing_dir / imp).as_posix()
+            # Normalize .. and .
+            parts = []
+            for part in resolved.split('/'):
+                if part == '..':
+                    if parts:
+                        parts.pop()
+                elif part and part != '.':
+                    parts.append(part)
+            resolved = '/'.join(parts)
+            
+            # Try exact match (with extensions)
+            for ext in ('.ts', '.tsx', '.js', '.jsx', '.py'):
+                candidate = resolved + ext
+                if candidate in current_files:
+                    targets.add(candidate)
+            # Try as directory with index file
+            for ext in ('.ts', '.tsx', '.js', '.jsx', '.py'):
+                candidate = resolved + '/index' + ext
+                if candidate in current_files:
+                    targets.add(candidate)
+            # Try without extension (in case it's already in file_lookup)
+            if resolved in file_lookup:
+                targets.update(file_lookup[resolved])
                 
+        # @/ alias
+        elif imp.startswith('@/'):
+            # Convert @/ to src/
+            converted = 'src/' + imp[2:]
+            # Try exact match with extensions
+            for ext in ('.ts', '.tsx', '.js', '.jsx', '.py'):
+                candidate = converted + ext
+                if candidate in current_files:
+                    targets.add(candidate)
+            # Try as directory with index
+            for ext in ('.ts', '.tsx', '.js', '.jsx', '.py'):
+                candidate = converted + '/index' + ext
+                if candidate in current_files:
+                    targets.add(candidate)
+            # Try file_lookup
+            if converted in file_lookup:
+                targets.update(file_lookup[converted])
+                
+        # Absolute from root or bare
+        else:
+            # Try as absolute path from root
+            for ext in ('.ts', '.tsx', '.js', '.jsx', '.py'):
+                candidate = imp + ext
+                if candidate in current_files:
+                    targets.add(candidate)
+            # Try as directory with index
+            for ext in ('.ts', '.tsx', '.js', '.jsx', '.py'):
+                candidate = imp + '/index' + ext
+                if candidate in current_files:
+                    targets.add(candidate)
+            # Try file_lookup (matches stem, @/ key, etc.)
+            if imp in file_lookup:
+                targets.update(file_lookup[imp])
+                
+        return targets
+    
+    # Build resolved reverse deps
+    resolved_reverse_deps = {}
+    for rel_path, data in files_cache.items():
+        if data.get('language') not in ('python', 'javascript', 'typescript'):
+            continue
+            
+        imports = data.get('imports', [])
+        for imp in imports:
+            targets = resolve_import(imp, rel_path)
+            for target in targets:
+                resolved_reverse_deps.setdefault(target, set()).add(rel_path)
+    
+    # Convert sets to lists for JSON serialization
+    resolved_reverse_deps = {k: list(v) for k, v in resolved_reverse_deps.items()}
+    
     index_data['files'] = files_cache
     index_data['reverse_deps'] = reverse_deps
+    index_data['resolved_reverse_deps'] = resolved_reverse_deps
     
     # Atomic save
     index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -244,8 +362,9 @@ def compile_context_packet(target_file: Path, workspace_root: Path, index_data: 
         packet_lines.append(", ".join(imports))
         
     # 3. Reverse Dependencies (files that import this module)
-    # We look up target_module_name in reverse_deps
-    rev_deps = reverse_deps.get(target_module_name, [])
+    # Use resolved reverse deps which maps target file path -> importing files
+    resolved_reverse_deps = index_data.get('resolved_reverse_deps', {})
+    rev_deps = resolved_reverse_deps.get(rel_target, [])
     if rev_deps:
         packet_lines.append("\n[Reverse Dependencies]")
         packet_lines.append(", ".join(rev_deps))

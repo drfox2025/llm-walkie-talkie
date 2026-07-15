@@ -23,6 +23,7 @@ Use this skill when you want to achieve a complex, design-critical code implemen
 2. **Enforce the 3-Distinct-Vendor & Active Provider Rule**:
    - The loop will fail startup if less than 3 distinct model vendors (e.g. Gemini, OpenAI, Anthropic, DeepSeek, GLM) are configured.
    - Warm start checks will verify active credentials. Make sure `--gen-model`, `--audit-model`, and `--redteam-model` use providers that are fully configured to avoid connection issues.
+   - **Operational Resilience Check:** A warning will trigger if all configured distinct-vendor models route through the same backend API provider (e.g. all on OpenRouter or all on NVIDIA NIM). To prevent Single Point of Failure (SPOF) outages, balance the model choices across multiple active providers (e.g. combining NVIDIA NIM, OpenRouter, and Google Gemini).
 
 3. **Prioritize Sandbox Execution**:
    - Always run the loop inside a detached sandbox worktree to isolate modifications and allow safe rollbacks:

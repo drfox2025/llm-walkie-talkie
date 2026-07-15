@@ -19,7 +19,11 @@ REGISTRY_PATH = CONFIG_DIR / "model_registry.json"
 REGISTRY_TTL = int(os.environ.get("WALKIE_REGISTRY_TTL", 86400))  # 24h default
 
 # Fixed provider preference when no EWMA data exists yet
-PROVIDER_PRIORITY = ["NVIDIA", "ZENMUX", "OPENROUTER", "GROQ", "GEMINI", "OPENAI", "ANTHROPIC"]
+_env_priority = os.environ.get("LWT_PROVIDER_ORDER")
+if _env_priority:
+    PROVIDER_PRIORITY = [p.strip().upper() for p in _env_priority.split(",") if p.strip()]
+else:
+    PROVIDER_PRIORITY = ["NVIDIA", "ZENMUX", "OPENROUTER", "GROQ", "GEMINI", "OPENAI", "ANTHROPIC"]
 
 # Min samples before switching from priority order to EWMA-based election
 MIN_EWMA_SAMPLES = 5

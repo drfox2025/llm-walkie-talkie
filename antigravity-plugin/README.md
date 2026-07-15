@@ -61,24 +61,40 @@ Among its technical capabilities, LWT scans provider endpoints on-demand to iden
 
 ---
 
-## 🔑 Fetching Free API Credentials
+## 🚀 Quick Start (30 seconds)
 
-You do not need paid subscriptions to start consulting high-performing models. We recommend looking for free API keys from the following providers:
+The fastest way to start is with **OpenRouter** — no credit card, instant access to 50+ free models:
 
-1. **ZenMux (GLM 5.2 / DeepSeek)**:
-   - Visit [ZenMux](https://zenmux.ai) and sign up.
-   - Under the developer section, generate a free API key which allows calling advanced models like GLM 5.2 and Fable.
-   
-2. **NVIDIA NIM Gateway**:
-   - Visit [NVIDIA Build](https://build.nvidia.com).
-   - Sign up to receive free NIM integration credits. You can generate an API key (`nvapi-...`) to access high-speed NIM gateway models like `z-ai/glm-5.2` or `deepseek-ai/deepseek-v4-pro`.
+1. Run the quick start wizard:
+   ```bash
+   walkie quickstart
+   ```
+2. Follow the 3-step guide that appears (sign in → create key → paste).
+3. Start coding:
+   ```bash
+   walkie ask -m openrouter/qwen/qwen3-coder:free --prompt "Hello, world!"
+   ```
 
-3. **OpenRouter (Free Tier Models)**:
-   - Visit [OpenRouter API Keys](https://openrouter.ai/keys) and create a key.
-   - You can query any OpenRouter model. Search for free models (those carrying the `:free` suffix) to run them at zero cost:
-     - `openrouter/google/gemma-2-9b-it:free`
-     - `openrouter/google/gemini-2.5-flash:free`
-     - `openrouter/meta-llama/llama-3-8b-instruct:free`
+### Want More Providers?
+
+You do not need paid subscriptions to consult high-performing models. All providers below offer free tiers:
+
+| Provider | Free Tier | Setup Command | What You Get |
+|---|---|---|---|
+| **OpenRouter** | ✅ No credit card | `walkie setup -p openrouter` | 50+ free models (Qwen3 Coder, Laguna, Nemotron) |
+| **NVIDIA NIM** | ✅ 40 RPM free | `walkie setup -p nvidia` | GLM 5.2, DeepSeek V4 Pro on GPU |
+| **ZenMux** | ✅ Free tier | `walkie setup -p zenmux` | GLM 5.2, Fable |
+| **Groq** | ✅ Free tier | `walkie setup -p groq` | Llama 3, Mixtral (ultra-low latency) |
+
+Or configure all providers at once with the full wizard:
+```bash
+walkie setup
+```
+
+After setup, discover all available models:
+```bash
+walkie discover --coding-only
+```
 
 ---
 
