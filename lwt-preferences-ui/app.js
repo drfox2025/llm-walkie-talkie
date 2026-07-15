@@ -32,46 +32,70 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  // 4-char masked prefix: first 4 chars of key + ****
-  function maskKey4(key) {
-    if (!key || key.length < 4) return '****';
-    return key.slice(0, 4) + '****';
+  // 4-char masked prefix: first 4 chars of key + ••••
+  function maskKey(key) {
+    if (!key || key.length < 4) return '••••';
+    return key.slice(0, 4) + '••••';
   }
 
   // ── Per-key API state array ───────────────────────────────────────────────
   // { id, provider, maskedPrefix, label, status, lastUsed, tokensToday, tokensMonth, lastError, errorReason, configuredAt }
   let apiKeyEntries = [
-    { id: 'nvidia-1',     provider: 'NVIDIA',     maskedPrefix: 'nvap****', label: 'NVIDIA NIM Key',    status: 'active', lastUsed: '2h ago', tokensToday: 14320, tokensMonth: 341200, lastError: null,               errorReason: null,              configuredAt: '2026-07-13' },
-    { id: 'openrouter-1', provider: 'OPENROUTER', maskedPrefix: 'sk-or****', label: 'OpenRouter Key',    status: 'active', lastUsed: '4h ago', tokensToday: 4200,  tokensMonth: 128500, lastError: null,               errorReason: null,              configuredAt: '2026-07-12' },
-    { id: 'zenmux-1',     provider: 'ZENMUX',     maskedPrefix: 'sk-ai****', label: 'ZenMux GLM Key',   status: 'dead',   lastUsed: '2d ago', tokensToday: 0,     tokensMonth: 4500,   lastError: '2026-07-13 09:15', errorReason: '401 Unauthorized', configuredAt: '2026-07-10' },
-    { id: 'gemini-1',     provider: 'GEMINI',     maskedPrefix: 'AIza****', label: 'Google Gemini Key', status: 'dead',   lastUsed: '1d ago', tokensToday: 0,     tokensMonth: 12000,  lastError: '2026-07-14 17:40', errorReason: 'Quota exceeded',  configuredAt: '2026-07-11' },
-    { id: 'groq-1',       provider: 'GROQ',       maskedPrefix: 'gsk_****', label: 'Groq Llama Key',   status: 'dead',   lastUsed: '3d ago', tokensToday: 0,     tokensMonth: 0,      lastError: '2026-07-12 12:00', errorReason: 'No key configured', configuredAt: null },
+    { id: 'nvidia-1',          provider: 'NVIDIA',          maskedPrefix: 'nvap****', label: 'NVIDIA NIM Key',         status: 'active', lastUsed: '2h ago', tokensToday: 14320, tokensMonth: 341200, lastError: null,               errorReason: null,              configuredAt: '2026-07-13' },
+    { id: 'nvidia_deepseek-1', provider: 'NVIDIA_DEEPSEEK', maskedPrefix: 'nvap****', label: 'NVIDIA DeepSeek Key',    status: 'dead',   lastUsed: 'Never',  tokensToday: 0,     tokensMonth: 0,      lastError: '2026-07-14 10:00', errorReason: 'Key expired',     configuredAt: '2026-07-13' },
+    { id: 'openrouter-1',      provider: 'OPENROUTER',      maskedPrefix: 'sk-or****', label: 'OpenRouter Key',         status: 'active', lastUsed: '4h ago', tokensToday: 4200,  tokensMonth: 128500, lastError: null,               errorReason: null,              configuredAt: '2026-07-12' },
+    { id: 'zenmux-1',          provider: 'ZENMUX',          maskedPrefix: 'sk-ai****', label: 'ZenMux GLM Key',        status: 'dead',   lastUsed: '2d ago', tokensToday: 0,     tokensMonth: 4500,   lastError: '2026-07-13 09:15', errorReason: '401 Unauthorized', configuredAt: '2026-07-10' },
+    { id: 'gemini-1',          provider: 'GEMINI',          maskedPrefix: 'AIza****', label: 'Google Gemini Key',      status: 'dead',   lastUsed: '1d ago', tokensToday: 0,     tokensMonth: 12000,  lastError: '2026-07-14 17:40', errorReason: 'Quota exceeded',  configuredAt: '2026-07-11' },
+    { id: 'groq-1',            provider: 'GROQ',            maskedPrefix: 'gsk_****', label: 'Groq Llama Key',         status: 'dead',   lastUsed: '3d ago', tokensToday: 0,     tokensMonth: 0,      lastError: '2026-07-12 12:00', errorReason: 'No key configured', configuredAt: null },
+    { id: 'openai-1',          provider: 'OPENAI',          maskedPrefix: 'sk-****',   label: 'OpenAI Key',             status: 'dead',   lastUsed: 'Never',  tokensToday: 0,     tokensMonth: 0,      lastError: '2026-07-11 12:00', errorReason: 'No key configured', configuredAt: null },
+    { id: 'anthropic-1',       provider: 'ANTHROPIC',       maskedPrefix: 'sk-an****', label: 'Anthropic Key',          status: 'dead',   lastUsed: 'Never',  tokensToday: 0,     tokensMonth: 0,      lastError: '2026-07-10 12:00', errorReason: 'No key configured', configuredAt: null }
   ];
 
   const providerTagClass = {
-    NVIDIA: 'tag-nvidia', OPENROUTER: 'tag-openrouter', ZENMUX: 'tag-zenmux',
+    NVIDIA: 'tag-nvidia', NVIDIA_DEEPSEEK: 'tag-nvidia-ds', OPENROUTER: 'tag-openrouter', ZENMUX: 'tag-zenmux',
     GROQ: 'tag-groq', GEMINI: 'tag-gemini', OPENAI: 'tag-openai', ANTHROPIC: 'tag-anthropic'
   };
 
-  // Per-provider 7-day token/error/call history for mini-charts
-  const providerTokenHistory = {
-    NVIDIA:     [14200, 23100, 9000, 19500, 31000, 14320, 8100],
-    OPENROUTER: [3000,  5400,  2100, 4800,  7200,  4200,  2500],
-    ZENMUX:     [800,   0,     0,    0,     0,     0,     0   ],
-    GEMINI:     [1200,  600,   0,    0,     0,     0,     0   ],
+  // Generate 30 days of mock token histories per API provider for last 30 days monitoring
+  const providerTokenHistory = {};
+  const providerErrorHistory = {};
+  const providerCallHistory = {};
+
+  const providersList = ['NVIDIA', 'NVIDIA_DEEPSEEK', 'OPENROUTER', 'ZENMUX', 'GEMINI', 'GROQ', 'OPENAI', 'ANTHROPIC'];
+
+  const init30DayHistories = () => {
+    providersList.forEach(p => {
+      providerTokenHistory[p] = [];
+      providerErrorHistory[p] = [];
+      providerCallHistory[p] = [];
+      for (let i = 0; i < 30; i++) {
+        let val = 0;
+        let errs = 0;
+        let calls = 0;
+        if (p === 'NVIDIA') {
+          val = Math.floor(Math.random() * 15000) + 5000;
+          errs = Math.random() > 0.85 ? Math.floor(Math.random() * 8) : 0;
+        } else if (p === 'OPENROUTER') {
+          val = Math.floor(Math.random() * 5000) + 1500;
+          errs = Math.random() > 0.95 ? 1 : 0;
+        } else if (p === 'ZENMUX') {
+          val = i < 5 ? Math.floor(Math.random() * 1000) + 200 : 0;
+          errs = i < 5 ? Math.floor(Math.random() * 30) + 15 : 0;
+        } else if (p === 'GEMINI') {
+          val = i < 10 ? Math.floor(Math.random() * 2000) + 500 : 0;
+          errs = i < 10 ? Math.floor(Math.random() * 10) + 5 : 0;
+        } else if (p === 'NVIDIA_DEEPSEEK') {
+          val = 0;
+          errs = Math.random() > 0.8 ? Math.floor(Math.random() * 4) : 0;
+        }
+        calls = val > 0 ? Math.floor(val / 800) + 1 : 0;
+        providerTokenHistory[p].push(val);
+        providerErrorHistory[p].push(errs);
+        providerCallHistory[p].push(calls);
+      }
+    });
   };
-  const providerErrorHistory = {
-    NVIDIA:     [0, 32, 6, 1, 0, 3, 0],
-    OPENROUTER: [0, 0,  2, 0, 0, 0, 0],
-    ZENMUX:     [0, 18, 30, 0, 0, 0, 0],
-    GEMINI:     [2, 4,  0, 0, 0, 0, 0],
-  };
-  const providerCallHistory = {
-    NVIDIA:     [20, 40, 10, 12, 25, 7, 10],
-    OPENROUTER: [8,  12, 6,  8,  14, 5, 6 ],
-    ZENMUX:     [3,  20, 32, 0,  0,  0, 0 ],
-    GEMINI:     [6,  8,  0,  0,  0,  0, 0 ],
-  };
+  init30DayHistories();
 
   // Generate 30 days of mock token spending logs for main chart
   let tokenSpentHistory = [];
@@ -234,13 +258,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildMiniChart(provider) {
-    const tokens = providerTokenHistory[provider] || [0,0,0,0,0,0,0];
-    const errors = providerErrorHistory[provider] || [0,0,0,0,0,0,0];
-    const calls  = providerCallHistory[provider]  || [1,1,1,1,1,1,1];
+    const tokens = providerTokenHistory[provider] || Array(30).fill(0);
+    const errors = providerErrorHistory[provider] || Array(30).fill(0);
+    const calls  = providerCallHistory[provider]  || Array(30).fill(1);
     const maxT   = Math.max(...tokens, 1);
     const today  = new Date();
-    const labels = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(today); d.setDate(today.getDate() - (6 - i));
+    const labels = Array.from({ length: 30 }, (_, i) => {
+      const d = new Date(today); d.setDate(today.getDate() - (29 - i));
       return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     });
     const bars = tokens.map((t, i) => {
@@ -252,7 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }).join('');
     return `<div class="api-card-mini-chart">
       <div class="mini-chart-bars">${bars}</div>
-      <div class="mini-chart-label"><span>${labels[0]}</span><span style="color:var(--orange);">7-day tokens</span><span>${labels[6]}</span></div>
+      <div class="mini-chart-label"><span>${labels[0]}</span><span style="color:var(--orange);">30-day tokens</span><span>${labels[29]}</span></div>
     </div>`;
   }
 
@@ -345,18 +369,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el) el.textContent = apiKeyEntries.filter(e => e.status === 'active').length;
   }
 
-  function bindCardDragging() {
-    let dragCard = null;
-    const activeCards = activeContainer.querySelectorAll('.api-key-card');
-    activeCards.forEach(card => {
-      card.addEventListener('dragstart', e => { dragCard = card; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
-      card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragCard = null; if (preferencesState.autosave) doSaveSilent(); });
-    });
+  let dragCard = null;
+  if (activeContainer) {
     activeContainer.addEventListener('dragover', e => {
       e.preventDefault(); if (!dragCard) return;
       const afterEl = getDragAfterElement(activeContainer, e.clientY);
       if (afterEl == null) activeContainer.appendChild(dragCard);
       else activeContainer.insertBefore(dragCard, afterEl);
+    });
+  }
+
+  function bindCardDragging() {
+    const activeCards = activeContainer.querySelectorAll('.api-key-card');
+    activeCards.forEach(card => {
+      card.addEventListener('dragstart', e => { dragCard = card; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+      card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragCard = null; if (preferencesState.autosave) doSaveSilent(); });
     });
   }
 
@@ -409,7 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const labelVal     = (document.getElementById('custom-key-label')?.value || '').trim();
       if (!providerName || !keyValue) { alert('Please enter both a key and provider.'); return; }
       // SECURITY: raw key is never stored in DOM or JS state — send to extension host only
-      const masked = maskKey4(keyValue);
+      const masked = maskKey(keyValue);
       const newEntry = {
         id: `${providerName.toLowerCase()}-${Date.now()}`, provider: providerName, maskedPrefix: masked,
         label: labelVal || `${providerName} Key`, status: 'active', lastUsed: 'just now', tokensToday: 0,
@@ -449,24 +476,42 @@ document.addEventListener('DOMContentLoaded', () => {
     chartContainer.innerHTML = '';
 
     const hasFilter = monitoredApis.length > 0;
-    const activeCount = apiKeyEntries.filter(e => e.status === 'active').length;
-    const ratio = activeCount > 0 ? monitoredApis.length / activeCount : 1;
 
     // Map token history based on selected APIs from filter
-    const currentHistory = tokenSpentHistory.map(day => {
+    const currentHistory = tokenSpentHistory.map((day, idx) => {
+      let totalTokens = 0;
+      let totalErrors = 0;
+      let totalCalls = 0;
+      if (hasFilter) {
+        monitoredApis.forEach(api => {
+          totalTokens += providerTokenHistory[api] ? providerTokenHistory[api][idx] : 0;
+          totalErrors += providerErrorHistory[api] ? providerErrorHistory[api][idx] : 0;
+          totalCalls += providerCallHistory[api] ? providerCallHistory[api][idx] : 0;
+        });
+      }
       return {
-        ...day,
-        tokens: hasFilter ? Math.round(day.tokens * ratio) : 0,
-        errors: hasFilter ? Math.round(day.errors * ratio) : 0,
-        calls: hasFilter ? Math.round(day.calls * ratio) : 0
+        date: day.date,
+        tokens: totalTokens,
+        errors: totalErrors,
+        calls: totalCalls
       };
     });
 
     const maxVal = Math.max(...currentHistory.map(h => h.tokens), 1000);
-    currentHistory.forEach(day => {
+    currentHistory.forEach((day, idx) => {
       const bar = document.createElement('div'); bar.className = 'token-bar';
       bar.style.height = `${Math.max(3, (day.tokens / maxVal) * 100)}%`;
-      bar.setAttribute('data-tooltip', `${day.date}: ${day.tokens.toLocaleString()} tokens`);
+      
+      let apiBreakdowns = [];
+      monitoredApis.forEach(api => {
+        const amt = providerTokenHistory[api] ? providerTokenHistory[api][idx] : 0;
+        if (amt > 0) {
+          apiBreakdowns.push(`${api}: ${amt.toLocaleString()}`);
+        }
+      });
+      const breakdownStr = apiBreakdowns.length > 0 ? ` (${apiBreakdowns.join(' | ')})` : '';
+      bar.setAttribute('data-tooltip', `${day.date}: ${day.tokens.toLocaleString()} tokens${breakdownStr}`);
+      
       const rate = day.calls > 0 ? (day.errors / day.calls) * 10 : 0;
       if (day.errors >= 30 || rate >= 5) bar.classList.add('err-critical');
       else if (day.errors >= 15 || rate >= 3) bar.classList.add('err-warn');
@@ -1067,6 +1112,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const oldLoadSettings = loadSettings;
   loadSettings = function(data) {
+    if (!data) return;
     oldLoadSettings(data);
     if (data.prefDailyTokenNoCap != null) setCheck('pref-daily-token-nocap', data.prefDailyTokenNoCap);
     if (data.prefDailyCostNoCap != null)  setCheck('pref-daily-cost-nocap', data.prefDailyCostNoCap);
@@ -1083,7 +1129,78 @@ document.addEventListener('DOMContentLoaded', () => {
   populateMonitorFilter();
   renderApiCards();
   renderTokenSpentMonitor();
-  schedule7PMLocalUpdate();
   updateStatusPill();
+
+  // ── State Machine Vector Graph Generator ──────────────────────────────────
+  const btnGenerateGraph = document.getElementById('btn-generate-graph');
+  const graphContainer = document.getElementById('state-graph-container');
+
+  if (btnGenerateGraph && graphContainer) {
+    btnGenerateGraph.addEventListener('click', () => {
+      alert("Graph generation is currently a work in progress.");
+      graphContainer.innerHTML = `
+        <svg viewBox="0 0 800 320" width="100%" height="320" style="background:#0a0a0a; border-radius:6px; font-family:var(--font-sans);">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--orange)" />
+            </marker>
+            <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
+              <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="var(--orange)" flood-opacity="0.3"/>
+            </filter>
+          </defs>
+
+          <text x="400" y="30" fill="var(--orange)" font-size="14" font-weight="bold" text-anchor="middle" letter-spacing="1">
+            LWT SYSTEM RUNTIME STATE MACHINE &amp; ARCHITECTURE
+          </text>
+
+          <rect x="20" y="120" width="110" height="50" rx="6" fill="#111" stroke="var(--border)" stroke-width="1.5" filter="url(#glow)"/>
+          <text x="75" y="145" fill="#ffffff" font-size="11" font-weight="600" text-anchor="middle">CLI Trigger</text>
+          <text x="75" y="160" fill="var(--text-muted)" font-size="9" text-anchor="middle">walkie ask / loop</text>
+
+          <path d="M 130 145 L 174 145" stroke="var(--orange)" stroke-width="1.5" marker-end="url(#arrow)" />
+
+          <rect x="180" y="120" width="120" height="50" rx="6" fill="#111" stroke="var(--border)" stroke-width="1.5" filter="url(#glow)"/>
+          <text x="240" y="145" fill="#ffffff" font-size="11" font-weight="600" text-anchor="middle">API Discovery</text>
+          <text x="240" y="160" fill="#34d399" font-size="9" text-anchor="middle">Health check &amp; RTT</text>
+
+          <path d="M 300 145 L 344 145" stroke="var(--orange)" stroke-width="1.5" marker-end="url(#arrow)" />
+
+          <polygon points="410,100 470,145 410,190 350,145" fill="#111" stroke="var(--orange)" stroke-width="1.5" filter="url(#glow)"/>
+          <text x="410" y="142" fill="#ffffff" font-size="10" font-weight="bold" text-anchor="middle">EWMA Election</text>
+          <text x="410" y="154" fill="var(--text-muted)" font-size="8" text-anchor="middle">Select Route</text>
+
+          <path d="M 410 100 L 410 75 L 484 75" fill="none" stroke="var(--border)" stroke-width="1.5" marker-end="url(#arrow)" />
+          <text x="415" y="90" fill="var(--text-muted)" font-size="8">ask (single)</text>
+
+          <path d="M 410 190 L 410 215 L 484 215" fill="none" stroke="var(--border)" stroke-width="1.5" marker-end="url(#arrow)" />
+          <text x="415" y="205" fill="var(--orange)" font-size="8">loop (3 roles)</text>
+
+          <rect x="490" y="50" width="130" height="50" rx="6" fill="#181818" stroke="var(--border-dim)" stroke-width="1"/>
+          <text x="555" y="75" fill="#ffffff" font-size="10" text-anchor="middle">Single Consult</text>
+          <text x="555" y="90" fill="var(--text-muted)" font-size="8" text-anchor="middle">Surgical Patching</text>
+
+          <rect x="490" y="190" width="130" height="50" rx="6" fill="#181818" stroke="var(--orange)" stroke-width="1" filter="url(#glow)"/>
+          <text x="555" y="210" fill="#ffffff" font-size="10" font-weight="bold" text-anchor="middle">Loop: 3 Distinct Vendors</text>
+          <text x="555" y="222" fill="var(--text-muted)" font-size="8" text-anchor="middle">Gen → Audit → Red Team</text>
+
+          <path d="M 620 215 L 654 215" stroke="var(--border)" stroke-width="1.5" marker-end="url(#arrow)" />
+
+          <polygon points="695,190 735,215 695,240 655,215" fill="#111" stroke="var(--border)" stroke-width="1.5"/>
+          <text x="695" y="212" fill="#ffffff" font-size="9" font-weight="bold" text-anchor="middle">Oracle</text>
+          <text x="695" y="222" fill="#34d399" font-size="8" text-anchor="middle">Exit 0?</text>
+
+          <path d="M 695 190 L 695 145 L 650 145" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow)" />
+          <text x="702" y="170" fill="#34d399" font-size="8">Yes</text>
+
+          <path d="M 695 240 L 695 275 L 555 275 L 555 243" fill="none" stroke="var(--red)" stroke-width="1.5" marker-end="url(#arrow)" />
+          <text x="630" y="270" fill="var(--red)" font-size="8">No (Find defects &amp; retry)</text>
+
+          <rect x="520" y="120" width="125" height="50" rx="6" fill="#202020" stroke="#34d399" stroke-width="1.5"/>
+          <text x="582" y="145" fill="#34d399" font-size="11" font-weight="bold" text-anchor="middle">Apply Patch</text>
+          <text x="582" y="160" fill="var(--text-muted)" font-size="9" text-anchor="middle">Write to Disk</text>
+        </svg>
+      `;
+    });
+  }
 
 });

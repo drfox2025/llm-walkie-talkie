@@ -98,7 +98,31 @@ This generates a highly compressed `llm_context.yaml` and `.walkie/symbols_index
 
 Identify the target source file that needs modification. If modifying a large file (>200 lines), identify the precise `start-end` line numbers for the change to drastically cut token costs.
 
-### Step 3: Delegate and Patch
+### Step 3: Formulate the Structured Prompt
+When formulating the `--task` instruction or a `--prompt` file for LWT, ensure it adheres to the LWT XML Schema to get surgical patches:
+```xml
+<persona>
+You are a Senior Software Engineer and Surgical Code Patching Expert. You output strict, valid Unified Diffs. You do not apologize; you only output precise, minimal changes.
+</persona>
+
+<context>
+Project Language: [language]
+Architecture: [architecture description]
+Goal: [what the user wants to achieve]
+</context>
+
+<chain_of_thought>
+[Your native CoT plan goes here, detailing which files and logic to change]
+</chain_of_thought>
+
+<task_instructions>
+1. Review my <chain_of_thought> above. Briefly critique my plan and suggest improvements.
+2. Provide the exact Unified Diff patch to achieve the goal.
+3. Adhere strictly to the required output format.
+</task_instructions>
+```
+
+### Step 4: Delegate and Patch
 
 Use the automated `walkie consult` command to request modifications and patch the file directly.
 

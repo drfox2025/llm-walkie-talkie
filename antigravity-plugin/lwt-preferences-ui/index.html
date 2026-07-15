@@ -61,23 +61,23 @@
       <div class="cp-banner-info">
         <span class="cp-banner-title">LLM Walkie-Talkie (LWT)</span>
         <span class="cp-banner-feedback">Feedback: <a href="mailto:drleminhbui@gmail.com">drleminhbui@gmail.com</a> <span class="vi">[Liên hệ phản hồi]</span></span>
+        <span class="cp-subtitle" style="margin-top: 4px; display: block;">Agent Control Panel <span class="vi">[Bảng Điều Khiển Tác Nhân]</span></span>
       </div>
     </div>
 
     <!-- ═══════════════════ HEADER ═══════════════════ -->
     <header class="cp-header">
       <div class="cp-brand">
-        <div class="cp-title-block">
-          <span class="cp-subtitle">Agent Control Panel <span class="vi">[Bảng Điều Khiển Tác Nhân]</span></span>
-        </div>
       </div>
       <div class="cp-header-right">
-        <button class="cp-btn" id="btn-auto-setup" style="background: transparent; border: 1px solid var(--orange); color: var(--orange);">
-          ⚡ Auto-Setup by Native LLM <span class="vi">[Tự động thiết lập]</span>
-        </button>
-        <div class="cp-status-pill" id="status-pill">
-          <span class="status-dot" id="status-dot"></span>
-          <span id="status-label">Checking… <span class="vi">[Đang kiểm tra…]</span></span>
+        <div class="header-notifications-row" style="display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; flex: 1; justify-content: flex-end;">
+          <button class="cp-btn" id="btn-auto-setup" style="background: transparent; border: 1px solid var(--orange); color: var(--orange);">
+            ⚡ Auto-Setup by Native LLM <span class="vi">[Tự động thiết lập]</span>
+          </button>
+          <div class="cp-status-pill" id="status-pill">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-label">Checking… <span class="vi">[Đang kiểm tra…]</span></span>
+          </div>
         </div>
         <button class="cp-btn cp-btn-save" id="btn-save">
           <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M16.5 3.5h-13A1.5 1.5 0 002 5v10a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0018 15V5a1.5 1.5 0 00-1.5-1.5zM10 15a3 3 0 110-6 3 3 0 010 6zm4-9H7V4h7v2z"/></svg>
@@ -92,9 +92,13 @@
         <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M10 1a4 4 0 00-4 4 4 4 0 00.2 1.2L2 10.4V13h2v-1h1v-1h2v-1h.6l.6.6A4 4 0 0010 13a4 4 0 000-8A4 4 0 0010 1zm0 2a2 2 0 110 4 2 2 0 010-4z"/></svg>
         API Keys <span class="vi">[Khóa API]</span>
       </button>
+      <button class="cp-nav-tab" data-section="preferences">
+        <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
+        General Preference <span class="vi">[Sở thích chung]</span>
+      </button>
       <button class="cp-nav-tab" data-section="consult">
         <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v7a2 2 0 01-2 2H6l-4 4V5z"/></svg>
-        ai-consult Skill <span class="vi">[Kỹ Năng Hỏi]</span>
+        ai-consult Skill <span class="vi">[Kỹ năng hỏi tư vấn ngoài]</span>
       </button>
       <button class="cp-nav-tab" data-section="loop">
         <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 2l3 4H7l3-4zm0 12l-3-4h6l-3 4z"/></svg>
@@ -110,10 +114,6 @@
       <button class="cp-nav-tab" data-section="flags">
         <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M3 3h14l-2 5 2 5H3V3zm1 2v6h10l-1.5-3L14 5H4z"/></svg>
         Behavior Flags <span class="vi">[Cờ Hành Vi]</span>
-      </button>
-      <button class="cp-nav-tab" data-section="preferences">
-        <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
-        General Preference <span class="vi">[Sở thích chung]</span>
       </button>
     </nav>
 
@@ -153,10 +153,10 @@
           </div>
 
           <!-- Legend Table explaining the icon markers on main token chart -->
-          <div class="legend-table" style="display: flex; gap: 16px; font-size: 10px; color: var(--text-muted); margin-top: 8px; padding: 6px 12px; background: rgba(0,0,0,0.15); border-radius: var(--radius); flex-wrap: wrap;">
-            <span><strong>Legend [Chú giải]:</strong></span>
-            <span style="display:flex;align-items:center;gap:4px;"><span style="color:#ef4444;font-weight:bold;">⚡</span> Critical Connection Error (≥30 errors or fail rate ≥50% today) [Lỗi kết nối nghiêm trọng]</span>
-            <span style="display:flex;align-items:center;gap:4px;"><span style="color:#f59e0b;font-weight:bold;">!</span> Warning Connection Issue (15-29 errors or fail rate 30-49% today) [Cảnh báo sự cố kết nối]</span>
+          <div class="legend-table" style="display: flex; gap: 16px; font-size: 10px; color: var(--text-muted); margin-top: 8px; padding: 8px 14px; background: rgba(0,0,0,0.15); border-radius: var(--radius); flex-wrap: wrap; border: 1px solid var(--border-dim); line-height: 1.5;">
+            <span><strong>Condition Rules [Điều kiện hiển thị cảnh báo]:</strong></span>
+            <span style="display:flex;align-items:center;gap:4px;"><span style="color:#ef4444;font-weight:bold;font-size:13px;">⚡</span> Critical Connection Error (Daily errors ≥ 30 OR fail rate ≥ 50%) [Lỗi kết nối nghiêm trọng: Số lỗi trong ngày ≥ 30 HOẶC tỷ lệ lỗi ≥ 50%]</span>
+            <span style="display:flex;align-items:center;gap:4px;"><span style="color:#f59e0b;font-weight:bold;font-size:13px;">!</span> Warning Connection Issue (Daily errors 15-29 OR fail rate 30-49%) [Cảnh báo sự cố kết nối: Số lỗi trong ngày 15-29 HOẶC tỷ lệ lỗi 30-49%]</span>
             <span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:12px;height:8px;background:linear-gradient(to top,#3b82f6,#f97316);border-radius:1px;"></span> Spent Token Volume [Dung lượng token đã dùng]</span>
           </div>
         </div>
@@ -225,7 +225,7 @@
       <!-- ─────────── SECTION: ai-consult Skill ─────────── -->
       <section id="section-consult" class="cp-section">
         <div class="section-intro">
-          <h2>💬 ai-consult Skill <span class="vi">[Kỹ Năng Tư Vấn AI]</span></h2>
+          <h2>💬 ai-consult Skill <span class="vi">[Kỹ năng hỏi tư vấn ngoài]</span></h2>
           <p class="section-desc">Delegates coding tasks to external models, auto-applies surgical patches. Saves significant context tokens. <span class="vi">[Ủy quyền tác vụ mã hóa cho mô hình bên ngoài, áp dụng bản vá phẫu thuật tự động. Tiết kiệm đáng kể token ngữ cảnh.]</span></p>
         </div>
 
@@ -363,7 +363,7 @@
         <div class="skill-doc-box">
           <div class="doc-header">📖 Usage Guide &amp; Use Cases <span class="vi">[Hướng dẫn sử dụng &amp; Tác vụ thực tế]</span></div>
           <div class="doc-body">
-            <p><strong>ai-consult skill</strong> delegates independent programming tasks, quick bug fixes, or minor code refactoring to a more powerful external model to save significant main agent context tokens. <span class="vi">[Kỹ năng ai-consult dùng để ủy thác các tác vụ lập trình độc lập, sửa lỗi nhanh, hoặc tái cấu trúc một phần mã nguồn nhỏ cho một mô hình mạnh hơn ở bên ngoài nhằm tiết kiệm đáng kể token ngữ cảnh.]</span></p>
+            <p><strong>ai-consult skill</strong> delegates independent programming tasks, quick bug fixes, or minor code refactoring to a more powerful external model to save significant main agent context tokens. <span class="vi">[Kỹ năng hỏi tư vấn ngoài dùng để ủy thác các tác vụ lập trình độc lập, sửa lỗi nhanh, hoặc tái cấu trúc một phần mã nguồn nhỏ cho một mô hình mạnh hơn ở bên ngoài nhằm tiết kiệm đáng kể token ngữ cảnh.]</span></p>
             <ul>
               <li>
                 <strong>Use Case 1: Add a new method <span class="vi">[Tác vụ 1: Thêm phương thức mới]</span></strong><br>
@@ -426,6 +426,7 @@
               <span class="param-name">⛔ Stop Command (--stop-cmd) <span class="vi">[Lệnh Dừng Chứng Thực]</span></span>
               <span class="param-hint"><strong>AUTHORITATIVE oracle.</strong> Exit 0 = done. LLM verdicts are advisory only. <span class="vi">[Cơ quan xác thực chính thức. Thoát 0 = hoàn thành. LLM chỉ là tư vấn.]</span></span>
             </div>
+            <div class="param-control">
               <input type="text" class="cp-input mono" id="loop-stop-cmd" placeholder="pytest -q --tb=short">
               <span class="warning-text" style="font-size: 10px; color: var(--orange); display: block; margin-top: 4px; opacity: 0.8;">
                 ⚠️ Warning: Executed via shell=True. Avoid untrusted inputs. [Cảnh báo: Chạy qua shell=True, tránh lệnh không an toàn.]
@@ -1069,6 +1070,23 @@
               </label>
             </div>
           </div>
+          
+          <!-- State Machine Vector Graph Integration -->
+          <div class="param-row" style="flex-direction: column; align-items: stretch; border-top: 1px solid var(--border-dim); padding-top: 16px; margin-top: 16px; width: 100%; max-width: 100%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div class="param-label" style="max-width: 70%;">
+                <span class="param-name">Project State Machine Graph <span class="vi">[Đồ Thị Trạng Thái Dự Án]</span></span>
+                <span class="param-hint">Generate a professional vector graph (SVG) of the project structure and state machine for external LLM ingestion. <span class="vi">[Tạo đồ thị vector chuyên nghiệp (SVG) thể hiện cấu trúc dự án và máy trạng thái để cung cấp cho LLM ngoài.]</span></span>
+              </div>
+              <button id="btn-generate-graph" class="cp-btn cp-btn-ghost" style="width:100%; justify-content:center; padding:12px; margin-bottom:12px;">
+                🔄 Generate Graph <span class="vi">[Tạo đồ thị]</span>
+              </button>
+            </div>
+            <div id="state-graph-container" style="background: var(--black-0); border: 1px dashed var(--border); border-radius: var(--radius); padding: 12px; min-height: 100px; display: flex; align-items: center; justify-content: center; overflow-x: auto; color: var(--text-dim); width: 100%;">
+              <div style="font-size: 11px; text-align: center;">Click 'Generate Graph' to integrate state machine vector visualization. <span class="vi">[Nhấp 'Tạo đồ thị' để tích hợp trực quan hóa vector máy trạng thái.]</span></div>
+            </div>
+          </div>
+
         </div>
       </section>
 

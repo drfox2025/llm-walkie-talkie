@@ -34,7 +34,18 @@ The table must appear **prominently** in the response — not buried at the end.
 - This rule applies to: prose responses, artifact summaries, plan descriptions, task status tables, comments in code, and any other agent output visible to the user.
 - English is always acceptable as a fallback if the agent is uncertain whether the user is a Vietnamese speaker.
 
-## 5. General Best Practices
-<!-- EVOLVE_SECTION: CODING -->
+## 5. External Consultant Protocol (LLM Walkie-Talkie)
+When you encounter a complex issue that requires a second opinion or a surgical patch via LWT:
+1. **Halt and Formulate**: Do not immediately run `walkie consult` or `walkie ask`.
+2. **Emit CoT**: Explicitly output your Chain of Thought (CoT) to the user in a `<plan>` block. Explain your strategy for patching the code, including which files, line ranges, and the general logic of the diff.
+3. **Gather Context**: Use your native file reading tools to fetch the necessary line ranges of the files involved.
+4. **Construct the LWT Prompt**: Compile the context, a surgical patching persona, and your `<plan>` into a structured prompt using XML tags (`<persona>`, `<context>`, `<chain_of_thought>`, `<task_instructions>`, `<output_format>`, etc.).
+5. **Execute**: Call `walkie consult` or `walkie ask` with the assembled prompt.
+6. **Parse and Execute**: When the consultant responds, evaluate their advice. If they requested tools via `<tool_request>`, ensure LWT or you fulfill the request before applying the final `<patch>` to the local filesystem.
+
+## 6. General Best Practices
 - When using search tools (grep, find) for standard refactoring tasks, you MUST exclude test files and directories (e.g., `*test*`, `tests/`, `__tests__/`) from your search scope unless the user explicitly requested work on tests.
 - Follow PEP 8 guidelines for Python.
+
+## 7. Context Memory Maintenance
+- **State Machine Updates**: Whenever you perform a task that alters the project's macro architecture, control flow, or structural components, you MUST update the `.walkie/state.md` file. The `state.md` file must contain a Mermaid Markdown `stateDiagram-v2` or `flowchart TD` representing the updated state machine. Maintain stable node IDs.
