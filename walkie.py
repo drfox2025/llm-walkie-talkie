@@ -867,7 +867,10 @@ def route_model(model: str) -> Tuple[str, Optional[str], Optional[str]]:
 
             if info.get("api_base"):
                 routed_model = "openai/" + model.split("/", 1)[1]
-                api_base = info.get("api_base")
+                if provider == "NVIDIA" and "mythos" in model.lower():
+                    api_base = "https://nim.api.nvidia.com/v1"
+                else:
+                    api_base = info.get("api_base")
             else:
                 routed_model = model
             break
@@ -2367,8 +2370,18 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
     import yaml
     import hashlib
     import token_lint
+    import re
 
-
+    def is_safe_command(cmd):
+        if not cmd: return True
+        unsafe_patterns = [
+            r"rm\s+-rf?", r"mkfs", r":\(\)\{", r">\s*/dev/sda", r"dd\s+if=",
+            r"\bcurl\b", r"\bwget\b", r"\bnc\b", r"\bping\b", r"\bftp\b", r"\bssh\b"
+        ]
+        for pattern in unsafe_patterns:
+            if re.search(pattern, cmd):
+                return False
+        return True
 
     # startup vendor check
     v_gen = get_vendor(gen_model)
@@ -2504,6 +2517,7 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
     oscillation_count_diff = 0
     oscillation_count_score = 0
     patched_files_set = set()
+    escalation_mode = False
 
     def get_in_scope_files(s_path, c_data):
         import fnmatch
@@ -2552,24 +2566,28 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
                     # Unix process group creation session
                     popen_kwargs["start_new_session"] = True
 
-                proc = subprocess.Popen(stop_cmd, **popen_kwargs)
-                try:
-                    stdout, stderr = proc.communicate(timeout=float(iteration_timeout))
-                    stop_code = proc.returncode
-                    stop_output = (stdout or "") + "\n" + (stderr or "")
-                except subprocess.TimeoutExpired:
-                    # Terminate process group cleanly
-                    if os.name == 'nt':
-                        proc.terminate()
-                        # Windows taskkill /F /T can also be used as fallback but terminate usually works
-                    else:
-                        try:
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                        except Exception:
-                            pass
-                    proc.communicate()  # Clean buffers
-                    stop_code = -1
-                    stop_output = f"Command timed out after {iteration_timeout}s."
+                if not is_safe_command(stop_cmd):
+                    stop_code = 1
+                    stop_output = f"[LWT SECURITY] Blocked execution of unsafe command: {stop_cmd}"
+                else:
+                    proc = subprocess.Popen(stop_cmd, **popen_kwargs)
+                    try:
+                        stdout, stderr = proc.communicate(timeout=float(iteration_timeout))
+                        stop_code = proc.returncode
+                        stop_output = (stdout or "") + "\n" + (stderr or "")
+                    except subprocess.TimeoutExpired:
+                        # Terminate process group cleanly
+                        if os.name == 'nt':
+                            proc.terminate()
+                            # Windows taskkill /F /T can also be used as fallback but terminate usually works
+                        else:
+                            try:
+                                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                            except Exception:
+                                pass
+                        proc.communicate()  # Clean buffers
+                        stop_code = -1
+                        stop_output = f"Command timed out after {iteration_timeout}s."
             except Exception as se:
                 stop_code = -1
                 stop_output = f"Failed to execute stop command: {se}"
@@ -2592,6 +2610,8 @@ def loop_cmd(goal, stop_cmd, design_contract, gen_model, audit_model, redteam_mo
             # Design Contract Gates check
             gates_passed = True
             gate_feedback = ""
+            if escalation_mode:
+                gate_feedback += "\n[ESCALATION_MODE] Your previous attempts have oscillated. You are stuck in a loop. You MUST drastically change your approach, use different APIs, or rethink the architecture."
 
             if "token-lint" in gates_list and modified_files:
                 gate_res = token_lint.run_gate(modified_files, str(contract_path))
@@ -2747,7 +2767,9 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
 
             imp_kwargs = {}
             if fallback_mode:
-                imp_kwargs = {"temperature": 0.3, "top_p": 0.9}
+                imp_kwargs = {"temperature": 0.8 if escalation_mode else 0.3, "top_p": 0.9}
+            elif escalation_mode:
+                imp_kwargs = {"temperature": 0.8}
             try:
                 imp_reply, imp_usage = call_llm(gen_model, imp_messages, **imp_kwargs)
                 log_usage(gen_model, "Implementer", imp_usage)
@@ -2791,9 +2813,14 @@ Fix these issues and return the correct file patches. Use the standard walkie lo
                 last_diff_hash = current_diff_hash
 
                 if os.environ.get("LWT_LOOP_OSCILLATION") != "0" and oscillation_count_diff >= 2:
-                    click.secho("[STOP] Loop stuck (diff oscillation detected). Discarding sandbox.", fg="yellow")
-                    accumulator["outcome"] = "STUCK"
-                    break
+                    if not escalation_mode:
+                        click.secho("[WARN] Loop stuck (diff oscillation detected). Entering ESCALATION MODE.", fg="magenta", bold=True)
+                        escalation_mode = True
+                        oscillation_count_diff = 0
+                    else:
+                        click.secho("[STOP] Loop stuck even in escalation mode. Discarding sandbox.", fg="yellow")
+                        accumulator["outcome"] = "STUCK"
+                        break
 
             except Exception as e:
                 click.secho(f"Warning: Implementer call failed: {e}", fg="red")
@@ -2935,23 +2962,27 @@ JSON output only containing:
                     # Unix process group creation session
                     popen_kwargs["start_new_session"] = True
 
-                proc = subprocess.Popen(stop_cmd, **popen_kwargs)
-                try:
-                    stdout, stderr = proc.communicate(timeout=float(iteration_timeout))
-                    stop_code = proc.returncode
-                    stop_output = (stdout or "") + "\n" + (stderr or "")
-                except subprocess.TimeoutExpired:
-                    # Terminate process group cleanly
-                    if os.name == 'nt':
-                        proc.terminate()
-                    else:
-                        try:
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                        except Exception:
-                            pass
-                    proc.communicate()  # Clean buffers
-                    stop_code = -1
-                    stop_output = f"Command timed out after {iteration_timeout}s."
+                if not is_safe_command(stop_cmd):
+                    stop_code = 1
+                    stop_output = f"[LWT SECURITY] Blocked execution of unsafe command: {stop_cmd}"
+                else:
+                    proc = subprocess.Popen(stop_cmd, **popen_kwargs)
+                    try:
+                        stdout, stderr = proc.communicate(timeout=float(iteration_timeout))
+                        stop_code = proc.returncode
+                        stop_output = (stdout or "") + "\n" + (stderr or "")
+                    except subprocess.TimeoutExpired:
+                        # Terminate process group cleanly
+                        if os.name == 'nt':
+                            proc.terminate()
+                        else:
+                            try:
+                                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                            except Exception:
+                                pass
+                        proc.communicate()  # Clean buffers
+                        stop_code = -1
+                        stop_output = f"Command timed out after {iteration_timeout}s."
             except Exception as se:
                 stop_code = -1
                 stop_output = f"Failed to execute stop command: {se}"
@@ -3222,6 +3253,62 @@ def read(source):
     """Deterministic extractor for pseudo-tooling."""
     click.echo(f"Extracted content for {source}")
 
+
+@cli.command("sandbox")
+@click.option('--create', is_flag=True, help="Create a git worktree or virtual sandbox.")
+@click.option('--commit', type=str, help="Commit changes from the specified sandbox back to the host and prune.")
+def sandbox_cmd(create, commit):
+    """Manage standalone sandboxes for external agents."""
+    import subprocess
+    import tempfile
+    import shutil
+    import uuid
+    import time
+    from pathlib import Path
+    import sys
+    import os
+    
+    cwd = Path.cwd()
+    if create:
+        session = f"standalone-{int(time.time())}"
+        git_ok = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+        temp_sandbox = Path(tempfile.gettempdir()) / f"walkie-sandbox-{session}-{uuid.uuid4().hex[:8]}"
+        
+        if git_ok.returncode == 0:
+            head_commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            subprocess.run(["git", "worktree", "add", "--detach", str(temp_sandbox), head_commit], check=True, capture_output=True)
+            click.echo(str(temp_sandbox))
+        else:
+            # PERFORMANCE: Try os.link for hard links instead of full file copy
+            try:
+                shutil.copytree(cwd, temp_sandbox, ignore=shutil.ignore_patterns('.git', 'node_modules', '.venv', '__pycache__'), copy_function=os.link)
+            except Exception:
+                shutil.copytree(cwd, temp_sandbox, ignore=shutil.ignore_patterns('.git', 'node_modules', '.venv', '__pycache__'))
+            click.echo(str(temp_sandbox))
+            
+    elif commit:
+        sandbox_path = Path(commit)
+        if not sandbox_path.exists():
+            click.secho(f"[ERROR] Sandbox {sandbox_path} does not exist.", fg="red", err=True)
+            sys.exit(1)
+            
+        git_ok = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+        is_worktree = (git_ok.returncode == 0) and subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(sandbox_path), capture_output=True).returncode == 0
+        
+        click.echo(f"[COMMIT] Syncing changes from {sandbox_path} back to {cwd}...")
+        try:
+            shutil.copytree(sandbox_path, cwd, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', 'node_modules', '.venv', '__pycache__'))
+            click.secho("[SUCCESS] Patched files successfully copied back.", fg="green")
+        except Exception as e:
+            click.secho(f"[ERROR] Failed to copy files back: {e}", fg="red", err=True)
+            sys.exit(1)
+            
+        click.echo("[CLEANUP] Removing sandbox...")
+        if is_worktree:
+            subprocess.run(["git", "worktree", "remove", "-f", str(sandbox_path)], capture_output=True)
+            subprocess.run(["git", "worktree", "prune"], capture_output=True)
+        else:
+            shutil.rmtree(sandbox_path, ignore_errors=True)
 
 if __name__ == '__main__':
     cli()

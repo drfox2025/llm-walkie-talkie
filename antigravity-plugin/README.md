@@ -1,63 +1,64 @@
 # LLM Walkie-Talkie (IDE Agent Consultation CLI)
 
-**Tóm tắt tiếng Việt:**
-LLM Walkie-Talkie (LWT) là một giao diện dòng lệnh bảo mật và tối ưu hóa token dành riêng cho Antigravity IDE Agent và các lập trình viên. LWT đóng vai trò là cầu nối giao tiếp thông minh, giúp mô hình ngôn ngữ nội bộ của IDE Agent dễ dàng tham vấn các mô hình bên ngoài mạnh mẽ hơn. Bằng cách ủy thác việc biên soạn mã nguồn và vá lỗi tự động cho các mô hình ngoài, công cụ giúp giảm đáng kể chi phí tiêu thụ token nội bộ của Agent mà vẫn bảo vệ an toàn mã khóa API toàn cục.
-
-Điểm nổi bật của chương trình là khả năng tự động quét các cổng API để phát hiện và báo cáo các mô hình miễn phí đang hoạt động, đồng thời kiểm tra trực tiếp độ trễ kết nối thông qua các gói thăm dò để tự cập nhật bộ nhớ đệm trạng thái hệ thống. Bên cạnh đó, LWT tích hợp một quy trình vòng lặp tự sửa lỗi khép kín, phân chia nhiệm vụ đồng thời cho ba vai trò độc lập gồm mô hình triển khai mã nguồn, mô hình kiểm toán thiết kế giao diện và mô hình kiểm thử tìm lỗi xung đột. Toàn bộ quá trình chạy thử được cô lập hoàn toàn trên một phân nhánh Git Worktree độc lập để tránh ảnh hưởng đến thư mục làm việc hiện tại, đi kèm cơ chế sao lưu tự động ngăn ngừa mất mát dữ liệu trước khi cập nhật mã nguồn làm việc chính.
-
-**Cách sử dụng kết hợp với Gọi Kỹ năng (Skill Calling) & Tiến hóa Mô hình Nội bộ (Internal LLM Evolution):**
-1. **Khởi tạo và Ủy thác Nhiệm vụ qua Kỹ năng (Skills)**: IDE Agent tự động phát hiện và kích hoạt kỹ năng `ai-consult` (trong `.agents/skills/ai_consult/SKILL.md`) để giảm thiểu tiêu thụ token bằng cách ủy thác các tác vụ lập trình phức tạp cho mô hình bên ngoài qua lệnh `walkie consult`. Đối với các nhiệm vụ giao diện phức tạp đòi hỏi kiểm thử liên tục, Agent sẽ dùng kỹ năng `llm-loop` (trong `.agents/skills/llm_loop/SKILL.md`) để thực thi quy trình sửa lỗi tự động:
-   ```bash
-   walkie loop --goal "Xây dựng nút bấm đăng nhập" --stop-cmd "npm test" --design-contract theme.contract.yaml --session sess_1
-   ```
-2. **Kích hoạt Tiến hóa Mô hình Nội bộ (Internal LLM Evolution)**: LWT cung cấp cơ chế giúp mô hình IDE Agent nội bộ tự học hỏi và tối ưu hóa hệ thống luật của chính nó (như trong tệp `.agents/AGENTS.md`). Khi Agent phát hiện điểm chưa tối ưu trong quá trình lập luận hoặc giải quyết tác vụ, nó sẽ đóng gói ngữ cảnh thành JSON và gọi lệnh `walkie evolve`:
-   ```bash
-   walkie evolve --context '{"task": "Sửa lỗi đăng nhập", "self_assessment": "Tôi đã tốn nhiều thời gian đọc toàn bộ tệp thay vì sử dụng grep để tìm tuyến đường đăng nhập."}'
-   ```
-   Hệ thống sẽ tự động tham vấn một mô hình chuyên gia lớn hơn để phân tích chuỗi suy nghĩ (CoT), đề xuất quy tắc mới và tự động tiêm quy tắc đó vào phân đoạn chỉ định (ví dụ: `<!-- EVOLVE_SECTION: CODING -->`) trong hệ thống luật của Agent. Bạn hoặc Agent có thể khôi phục lại bất kỳ lúc nào bằng lệnh:
-   ```bash
-   walkie evolve-restore
-   ```
-
-*(English version is below)*
-
----
 <div align="center">
   <img src="https://raw.githubusercontent.com/drfox2025/llm-walkie-talkie/main/assets/banner.png" alt="LLM Walkie-Talkie Banner" width="100%">
 </div>
 
 LLM Walkie-Talkie (LWT) is a secure, token-efficient command-line interface and integration bridge designed specifically for the Antigravity IDE Agent and developers. It serves as a communication channel, enabling local IDE models to query and consult highly capable external large language models (LLMs). By offloading expensive code generation and automated patching tasks to external services, LWT significantly lowers token consumption for the native IDE models while keeping API credentials isolated and protected.
 
-Among its technical capabilities, LWT scans provider endpoints on-demand to identify and notify developers of available free-tier models, automatically probing connection health and latencies to update local cache files. It also orchestrates an autonomous, goal-driven patching loop that coordinates three separate LLM roles—an Implementer, a Design Contract Auditor, and an adversarial Red Team critic—to systematically refine code quality and prevent developer self-justification bias. To ensure security, all validation testing runs in isolated Git Worktree sandboxes, complete with automatic file backup histories that prevent host directory data loss upon copy-back.
+## 🌟 Key Advantages & Features
 
-## 🚀 Key Features
+1. **Token Cost Efficiency**: IDE agents share a limited context. LWT allows you to delegate massive refactoring, debugging, or research tasks to external endpoints (OpenRouter, Gemini, Groq, Cerebras), preserving your primary agent's token budget.
+2. **Multi-LLM Autonomous Loop (PDCA)**: Orchestrates a self-correcting loop using 3 distinct LLM personas to prevent self-justification bias:
+   - **Implementer**: Writes the code patches.
+   - **Auditor**: Validates against the strict Design Contract YAML.
+   - **Red Team**: Adversarial critic that aggressively hunts for flaws and edge cases.
+3. **Isolated Sandbox Environments (Git Worktrees)**: All experimental changes and test executions (`walkie loop`) occur in an isolated temporary sandbox. This guarantees that your host project remains pristine until changes are fully validated. Includes ultra-fast sandbox creation using OS-level hard links (`os.link`).
+4. **Smart Model Discovery**: Dynamically scans configured providers to identify available free-tier models on-demand (`walkie discover`), checking latency and probing connection health.
+5. **Cross-Provider Failover Routing**: Groups identical models across different providers. Employs EWMA latency tracking to dynamically route queries to the fastest active provider and falls back instantly during rate limits (429) or outages.
+6. **Auto-Oracle Test Generation**: Automatically writes and executes verification scripts (Oracles) to validate the functional correctness of patches before merging them back to the workspace.
+7. **Strict Security Guardrails**: Integrates command blocklists (`curl`, `wget`, `nc`, `ping`, `ftp`, `ssh`) to block hallucinating agents from executing unsafe network requests or malicious payloads during the test phase.
+8. **Token-Saving Lexical Comment Stripper**: A robust, quote-safe lexical parser strips single-line and multi-line comments (`#`, `//`, `/* */`) across Python, JS, TS, Rust, Go, SQL, HTML, and C-family languages while preserving string literals to save up to 40% of prompt tokens.
+9. **Context-Aware Line-Aligned Truncation**: Intelligently slices attachments to fit model context limits, ensuring code is cut cleanly at line boundaries rather than mid-statement, logging metrics to `stderr`.
+10. **Multimodal Visual Reasoning**: Automatically detects image file attachments (`.png`, `.jpg`, `.jpeg`, `.webp`), encodes them into Base64, and constructs multimodal payloads for vision-capable models.
+11. **Native LLM Rule Evolution**: Provides the `walkie evolve` suite, allowing internal agents to critique their own work and inject updated behavioral rules into `.agents/AGENTS.md` automatically, with robust timestamped backups for rollbacks.
+12. **Audit Trails & Ledger Management**: Logs all events, token usage, and costs securely to a local ledger. Provides commands (`walkie ledger`) to review agent actions and costs by time range.
 
-1. **Automated Surgical Patching (`walkie consult`)**: 
-   - A built-in command that automates local refactoring.
-   - It reads target source files, submits modification tasks to external models, receives replacement blocks, and patches the file on disk.
-   - Employs a resilient regex parser to handle bracket fluctuations or minor format deviations from the model response.
+## 🛠️ How to use with IDE Skills (Slash Commands)
 
-2. **Real-time Streaming (`--stream`)**:
-   - Supports real-time token delivery to terminal outputs. If `--json-output` is requested, it accumulates the stream and outputs a final, clean JSON response.
+LWT natively extends the IDE Agent through embedded skill prompts. You can trigger these powerful workflows directly in the chat interface:
 
-3. **Multimodal Base64 Image Support**:
-   - Natively detects image file attachments (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`).
-   - Automatically base64-encodes them and builds standard multimodal payloads, making it fully compatible with visual reasoning models (Gemini, Fable).
+1. **AI Consultation (`/ai-consult`)**: Triggers the `ai-consult` skill to offload complex coding questions or surgical file modifications to external models (via `walkie consult`), drastically saving the native IDE agent's context tokens.
+2. **Native Goal Orchestrator (`/lwt-goal`)**: Triggers the `lwt-goal` skill. The native agent will act as a system orchestrator, automatically generating an Oracle test script and running a sandboxed Native Agent PDCA loop to iteratively achieve your goal while validating against design constraints.
+3. **Multi-LLM Engine (`/llm-loop`)**: Triggers the `llm-loop` skill, invoking the external Multi-LLM engine (`walkie loop`) where 3 distinct external models (Implementer, Auditor, Red Team) automatically debate and patch your code in a Git Worktree sandbox.
 
-4. **Agent Custom Skill Integration**:
-   - Includes a pre-configured `.agents/skills/ai_consult/SKILL.md` file.
-   - Allows agents to discover and trigger the `ai_consult` workflow automatically, delegating code modifications and reducing native token usage.
+---
 
-5. **Context-Aware Line-Aligned Truncation**:
-   - Slices attachments to fit the selected model's context limit without breaking line boundaries or cutting code mid-line.
-   - Logs detailed truncation metrics to `stderr`.
+## 🇻🇳 Tính năng và Ưu điểm vượt trội
 
-6. **Token Saving via Strip Comments**:
-   - A robust, quote-safe lexical parser removes line and block comments (`#`, `//`, `/* */`) across Python, JS, TS, Rust, Go, SQL, HTML, and C-family languages while preserving string literals.
+1. **Tiết kiệm Chi phí & Token**: Tránh làm quá tải context của IDE Agent nội bộ (vốn đắt đỏ) bằng cách ủy thác các tác vụ lập trình, gỡ lỗi hoặc nghiên cứu lớn cho các mô hình ngoài giá rẻ hoặc miễn phí (OpenRouter, Gemini, Groq...).
+2. **Vòng lặp Đa Mô hình Tự chỉnh sửa (PDCA)**: Phân phối và kiểm thử chéo thông qua 3 vai trò LLM độc lập để loại bỏ thiên kiến tự biện hộ:
+   - **Implementer**: Thực hiện chỉnh sửa mã nguồn.
+   - **Auditor**: Kiểm tra sự phù hợp với Hợp đồng Thiết kế (Design Contract).
+   - **Red Team**: Đóng vai trò hacker săn lỗi, thử nghiệm các tình huống biên phức tạp.
+3. **Không gian Cách ly Sandbox (Git Worktree)**: Mọi thử nghiệm và chạy lệnh test đều diễn ra trong thư mục Sandbox tạm thời. Đảm bảo mã nguồn gốc không bị lỗi hoặc ghi đè ngoài ý muốn. Sử dụng cơ chế sao chép liên kết cứng Hard Link (`os.link`) giúp tạo Sandbox gần như tức thì.
+4. **Tự động quét và phát hiện mô hình**: Tự động rà soát hệ thống API của các nhà cung cấp (`walkie discover`) để tìm ra các mô hình miễn phí mới nhất, tự động đo đạc độ trễ và lập bản đồ trạng thái kết nối.
+5. **Định tuyến & Dự phòng Liên nhà cung cấp**: Tự động gom nhóm các mô hình giống nhau giữa các nhà cung cấp. Đo đạc độ trễ EWMA để chuyển hướng sang kênh nhanh nhất, và tự động đổi nhà cung cấp nếu gặp lỗi quá tải (429) hoặc mất kết nối.
+6. **Auto-Oracle (Tự sinh bộ kiểm thử)**: Tự động viết và khởi chạy các kịch bản kiểm tra (Oracle) tương ứng với ngữ cảnh công việc của bạn, đảm bảo code thực sự vượt qua kiểm thử trước khi bàn giao.
+7. **Lớp bảo mật an toàn nghiêm ngặt**: Chặn đứng các lệnh gọi mạng trái phép như `curl`, `wget`, `nc`, `ping`... ngăn ngừa các lỗi ảo giác của LLM làm rò rỉ dữ liệu hoặc tải mã độc về máy.
+8. **Bộ loại bỏ chú thích tiết kiệm token**: Sử dụng bộ phân tích từ vựng an toàn (lexical parser) để bóc tách toàn bộ chú thích dòng/khối (`#`, `//`, `/* */`) của nhiều ngôn ngữ lập trình mà không ảnh hưởng tới chuỗi ký tự, tiết kiệm tới 40% lượng token.
+9. **Cắt nhỏ ngữ cảnh theo dòng**: Tự động tính toán giới hạn context của từng mô hình để cắt gọn tệp đính kèm một cách sạch sẽ theo ranh giới dòng, tránh việc cắt đứt dòng code ở giữa chừng gây lỗi cú pháp.
+10. **Hỗ trợ Thị giác Đa phương thức**: Tự động nhận diện và mã hóa các tệp ảnh (`.png`, `.jpg`, `.jpeg`...) sang định dạng Base64 để gửi payload dạng thị giác cho các mô hình như Gemini, GPT-4o phân tích thiết kế giao diện UI.
+11. **Tiến hóa Luật Agent Nội bộ**: Cung cấp bộ công cụ `walkie evolve` giúp Agent tự phê bình hành vi làm việc của mình, rút kinh nghiệm qua LLM ngoài và tự cập nhật luật mới vào `.agents/AGENTS.md` (kèm sao lưu thời gian thực để rollback nếu cần).
+12. **Báo cáo và Quản lý Nhật ký Ledger**: Ghi lại chi tiết mọi giao dịch gọi API, số token tiêu thụ và chi phí ước tính vào file nhật ký bảo mật. Cung cấp lệnh `walkie ledger` để truy vấn thống kê chi tiết theo mốc thời gian.
 
-7. **Centralized & Secure Configuration**:
-   - GUIDED interactive setup links to provider keys, masks inputs, checks structures, and enforces secure permissions (`0o600`).
-   - Stores configuration globally in `~/.walkie/.env` to prevent credentials from being overwritten during package updates.
+## 🛠️ Hướng dẫn sử dụng kết hợp Kỹ năng (Skills)
+
+LWT mở rộng sức mạnh cho IDE Agent thông qua hệ thống Kỹ năng (Skills). Bạn có thể gõ các lệnh Slash (/) sau trực tiếp vào khung chat:
+
+1. **Tham vấn mô hình ngoại (`/ai-consult`)**: Kích hoạt kỹ năng `ai-consult`. Thay vì tự viết code, IDE Agent sẽ gọi `walkie consult` để đóng gói ngữ cảnh, gửi cho các mô hình lớn bên ngoài giải quyết rồi lấy kết quả vá ngược lại vào file. Giúp tiết kiệm lượng lớn token nội bộ.
+2. **Tự động hóa Mục tiêu Nội bộ (`/lwt-goal`)**: Kích hoạt kỹ năng `lwt-goal`. IDE Agent sẽ tự động phân tích yêu cầu, viết script kiểm thử (Oracle), và tạo ra Sandbox độc lập để chạy vòng lặp PDCA bằng chính Native LLM cho đến khi code thực sự chạy đúng yêu cầu.
+3. **Vòng lặp Đa Mô hình Ngoại (`/llm-loop`)**: Kích hoạt kỹ năng `llm-loop`, khởi chạy công cụ `walkie loop` để 3 LLM chuyên gia bên ngoài (Implementer, Auditor, Red Team) tự động tranh luận, viết code và kiểm thử chéo trong môi trường Sandbox.
 
 ---
 
@@ -181,5 +182,3 @@ walkie evolve --context scratch/cot.json -m nvidia/z-ai/glm-5.2
   walkie evolve-restore AGENTS.md.20260713.bak   # Restore specific backup
   ```
 * **Use Case:** Permanently correct bad agent behaviors (such as searching test directories during a standard refactoring task or forgetting to verify imports) on-the-fly.
-
-

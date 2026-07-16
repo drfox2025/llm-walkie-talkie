@@ -1,9 +1,9 @@
 {
   "name": "llm-walkie-talkie",
   "displayName": "LLM Walkie-Talkie",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "publisher": "drfox2025",
-  "description": "Tham vấn LLM ngoại trực tiếp từ Antigravity IDE. Tiết kiệm token nội bộ và tự động vá lỗi mã nguồn.",
+  "description": "A secure, token-efficient IDE integration bridge. Offload complex automated code patching and generation to external LLMs directly from Antigravity IDE.",
   "icon": "logo.png",
   "engines": {
     "vscode": "^1.60.0"

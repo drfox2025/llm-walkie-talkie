@@ -34,3 +34,12 @@ Thumbs.db
 export_for_review/
 walkie_talkie.zip
 test_env/
+ovsx_token.txt
+oracle_test.py
+audit_report.md
+validate_audit.py
+scratch.py
+scratch_user_input.txt
+prompt.txt
+search_pat*.py
+*.vsix
