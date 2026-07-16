@@ -261,6 +261,22 @@ function activate(context) {
                     }
                     break;
                 }
+
+                case 'requestWorkspaceGraph': {
+                    let graphData = '';
+                    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                        const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                        const statePath = path.join(workspaceRoot, '.walkie', 'state.md');
+                        if (fs.existsSync(statePath)) {
+                            graphData = fs.readFileSync(statePath, 'utf8');
+                        }
+                    }
+                    panel.webview.postMessage({
+                        command: 'loadWorkspaceGraph',
+                        data: graphData
+                    });
+                    break;
+                }
             }
         }, undefined, context.subscriptions);
     });

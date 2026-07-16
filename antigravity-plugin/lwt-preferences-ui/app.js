@@ -1065,6 +1065,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const msg = event.data;
       if (msg.command === 'loadSettings') {
         loadSettings(msg.data);
+      } else if (msg.command === 'loadWorkspaceGraph') {
+        const graphContainer = document.getElementById('state-graph-container');
+        if (graphContainer) {
+          if (!msg.data) {
+            graphContainer.innerHTML = '<div style="color:var(--orange);">No .walkie/state.md found in workspace. Run a Walkie Talkie command first.</div>';
+          } else {
+            // Render Mermaid graph
+            graphContainer.innerHTML = '<div class="mermaid" style="background:#0a0a0a; border-radius:6px; padding:20px; font-family:var(--font-sans);">' + msg.data + '</div>';
+            if (typeof mermaid !== 'undefined') {
+              mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+            }
+          }
+        }
       }
     });
     vscodeApi.postMessage({ command: 'requestSettings' });
@@ -1137,69 +1150,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnGenerateGraph && graphContainer) {
     btnGenerateGraph.addEventListener('click', () => {
-      alert("Graph generation is currently a work in progress.");
-      graphContainer.innerHTML = `
-        <svg viewBox="0 0 800 320" width="100%" height="320" style="background:#0a0a0a; border-radius:6px; font-family:var(--font-sans);">
-          <defs>
-            <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--orange)" />
-            </marker>
-            <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="var(--orange)" flood-opacity="0.3"/>
-            </filter>
-          </defs>
-
-          <text x="400" y="30" fill="var(--orange)" font-size="14" font-weight="bold" text-anchor="middle" letter-spacing="1">
-            LWT SYSTEM RUNTIME STATE MACHINE &amp; ARCHITECTURE
-          </text>
-
-          <rect x="20" y="120" width="110" height="50" rx="6" fill="#111" stroke="var(--border)" stroke-width="1.5" filter="url(#glow)"/>
-          <text x="75" y="145" fill="#ffffff" font-size="11" font-weight="600" text-anchor="middle">CLI Trigger</text>
-          <text x="75" y="160" fill="var(--text-muted)" font-size="9" text-anchor="middle">walkie ask / loop</text>
-
-          <path d="M 130 145 L 174 145" stroke="var(--orange)" stroke-width="1.5" marker-end="url(#arrow)" />
-
-          <rect x="180" y="120" width="120" height="50" rx="6" fill="#111" stroke="var(--border)" stroke-width="1.5" filter="url(#glow)"/>
-          <text x="240" y="145" fill="#ffffff" font-size="11" font-weight="600" text-anchor="middle">API Discovery</text>
-          <text x="240" y="160" fill="#34d399" font-size="9" text-anchor="middle">Health check &amp; RTT</text>
-
-          <path d="M 300 145 L 344 145" stroke="var(--orange)" stroke-width="1.5" marker-end="url(#arrow)" />
-
-          <polygon points="410,100 470,145 410,190 350,145" fill="#111" stroke="var(--orange)" stroke-width="1.5" filter="url(#glow)"/>
-          <text x="410" y="142" fill="#ffffff" font-size="10" font-weight="bold" text-anchor="middle">EWMA Election</text>
-          <text x="410" y="154" fill="var(--text-muted)" font-size="8" text-anchor="middle">Select Route</text>
-
-          <path d="M 410 100 L 410 75 L 484 75" fill="none" stroke="var(--border)" stroke-width="1.5" marker-end="url(#arrow)" />
-          <text x="415" y="90" fill="var(--text-muted)" font-size="8">ask (single)</text>
-
-          <path d="M 410 190 L 410 215 L 484 215" fill="none" stroke="var(--border)" stroke-width="1.5" marker-end="url(#arrow)" />
-          <text x="415" y="205" fill="var(--orange)" font-size="8">loop (3 roles)</text>
-
-          <rect x="490" y="50" width="130" height="50" rx="6" fill="#181818" stroke="var(--border-dim)" stroke-width="1"/>
-          <text x="555" y="75" fill="#ffffff" font-size="10" text-anchor="middle">Single Consult</text>
-          <text x="555" y="90" fill="var(--text-muted)" font-size="8" text-anchor="middle">Surgical Patching</text>
-
-          <rect x="490" y="190" width="130" height="50" rx="6" fill="#181818" stroke="var(--orange)" stroke-width="1" filter="url(#glow)"/>
-          <text x="555" y="210" fill="#ffffff" font-size="10" font-weight="bold" text-anchor="middle">Loop: 3 Distinct Vendors</text>
-          <text x="555" y="222" fill="var(--text-muted)" font-size="8" text-anchor="middle">Gen → Audit → Red Team</text>
-
-          <path d="M 620 215 L 654 215" stroke="var(--border)" stroke-width="1.5" marker-end="url(#arrow)" />
-
-          <polygon points="695,190 735,215 695,240 655,215" fill="#111" stroke="var(--border)" stroke-width="1.5"/>
-          <text x="695" y="212" fill="#ffffff" font-size="9" font-weight="bold" text-anchor="middle">Oracle</text>
-          <text x="695" y="222" fill="#34d399" font-size="8" text-anchor="middle">Exit 0?</text>
-
-          <path d="M 695 190 L 695 145 L 650 145" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow)" />
-          <text x="702" y="170" fill="#34d399" font-size="8">Yes</text>
-
-          <path d="M 695 240 L 695 275 L 555 275 L 555 243" fill="none" stroke="var(--red)" stroke-width="1.5" marker-end="url(#arrow)" />
-          <text x="630" y="270" fill="var(--red)" font-size="8">No (Find defects &amp; retry)</text>
-
-          <rect x="520" y="120" width="125" height="50" rx="6" fill="#202020" stroke="#34d399" stroke-width="1.5"/>
-          <text x="582" y="145" fill="#34d399" font-size="11" font-weight="bold" text-anchor="middle">Apply Patch</text>
-          <text x="582" y="160" fill="var(--text-muted)" font-size="9" text-anchor="middle">Write to Disk</text>
-        </svg>
-      `;
+      if (vscodeApi) {
+        graphContainer.innerHTML = '<div style="font-size: 13px; text-align: center; color: var(--orange);">Loading workspace state machine...</div>';
+        vscodeApi.postMessage({ command: 'requestWorkspaceGraph' });
+      } else {
+        alert("This feature is only available when running inside VS Code extension webview.");
+      }
     });
   }
 
