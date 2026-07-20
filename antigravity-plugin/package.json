@@ -1,7 +1,7 @@
 {
   "name": "llm-walkie-talkie",
   "displayName": "LLM Walkie-Talkie",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "publisher": "drfox2025",
   "description": "A secure, token-efficient IDE integration bridge. Offload complex automated code patching and generation to external LLMs directly from Antigravity IDE.",
   "icon": "logo.png",
@@ -9,8 +9,26 @@
     "vscode": "^1.60.0"
   },
   "categories": [
+    "AI",
+    "Snippets",
     "Other"
   ],
+  "keywords": [
+    "llm",
+    "ai",
+    "agent",
+    "walkie-talkie",
+    "codegen",
+    "refactoring",
+    "openai",
+    "anthropic",
+    "gemini",
+    "deepseek"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
   "main": "./extension.js",
   "activationEvents": [
     "onStartupFinished"

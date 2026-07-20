@@ -1,5 +1,9 @@
 # LLM Walkie-Talkie (IDE Agent Consultation CLI)
 
+[![Version](https://img.shields.io/badge/version-1.0.14-blue.svg)](https://github.com/drfox2025/llm-walkie-talkie)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8+-yellow.svg)](https://www.python.org/)
+
 <div align="center">
   <img src="https://raw.githubusercontent.com/drfox2025/llm-walkie-talkie/main/assets/banner.png" alt="LLM Walkie-Talkie Banner" width="100%">
 </div>
@@ -51,6 +55,8 @@ LWT natively extends the IDE Agent through embedded skill prompts. You can trigg
 10. **Hỗ trợ Thị giác Đa phương thức**: Tự động nhận diện và mã hóa các tệp ảnh (`.png`, `.jpg`, `.jpeg`...) sang định dạng Base64 để gửi payload dạng thị giác cho các mô hình như Gemini, GPT-4o phân tích thiết kế giao diện UI.
 11. **Tiến hóa Luật Agent Nội bộ**: Cung cấp bộ công cụ `walkie evolve` giúp Agent tự phê bình hành vi làm việc của mình, rút kinh nghiệm qua LLM ngoài và tự cập nhật luật mới vào `.agents/AGENTS.md` (kèm sao lưu thời gian thực để rollback nếu cần).
 12. **Báo cáo và Quản lý Nhật ký Ledger**: Ghi lại chi tiết mọi giao dịch gọi API, số token tiêu thụ và chi phí ước tính vào file nhật ký bảo mật. Cung cấp lệnh `walkie ledger` để truy vấn thống kê chi tiết theo mốc thời gian.
+13. **Công cụ Trình phân giải Thông minh (`walkie resolve`)**: Hệ thống ghi nhớ các mô hình đã kết nối thành công vào tệp `verified_models.json`. Nhờ đó, bạn có thể gọi tên rút gọn (ví dụ: "GLM", "Claude") thay vì gõ toàn bộ mã mô hình dài dòng; hệ thống sẽ tự động đối chiếu, xếp hạng năng lực (capability tiers) và tự động chọn tuyến API tối ưu và mới nhất cho bạn.
+14. **Kháng lỗi Hệ thống Tự động (Failover Resilience)**: Nếu tuyến API của một nhà cung cấp gặp lỗi mạng, bị khóa thẻ, hoặc endpoint bị ngưng hoạt động (như lỗi 404), hệ thống không dừng lại mà lập tức nhảy sang nhà cung cấp dự phòng tiếp theo để đảm bảo luồng công việc của IDE không bị gián đoạn.
 
 ## 🛠️ Hướng dẫn sử dụng kết hợp Kỹ năng (Skills)
 
@@ -99,6 +105,14 @@ walkie discover --coding-only
 
 ---
 
+## 📦 Prerequisites
+
+Before installing, ensure your system meets the following requirements:
+* **Python**: `3.8` or higher
+* **Package Manager**: `pip` installed
+* **OS**: Windows, macOS, or Linux
+* **IDE**: Antigravity IDE (if using the Slash Command plugins)
+
 ## 📦 Installation & Setup
 
 ### Option 1: Automated setup script (Recommended)
@@ -135,7 +149,7 @@ walkie ask --prompt "Explain the concept of quantum computing."
 
 ### Stream response, attach code, and strip comments to save tokens:
 ```bash
-walkie ask --model nvidia/anthropic/claude-opus-4.8 --prompt "Audit this code" --attach walkie.py --strip-comments --stream
+walkie ask --model openrouter/anthropic/claude-3.5-sonnet --prompt "Audit this code" --attach walkie.py --strip-comments --stream
 ```
 
 ### Automate surgical refactoring:
@@ -146,7 +160,7 @@ walkie consult walkie.py --task "Add a docstring to the main entry point" --mode
 ### dry-run refactoring:
 Verify matching blocks and inspect compiled changes side-by-side without modifying files on disk:
 ```bash
-walkie consult main.py --task "Refactor login validation" --model zenmux/anthropic/claude-4-fable --dry-run
+walkie consult main.py --task "Refactor login validation" --model nvidia/deepseek-ai/deepseek-coder-6.7b-instruct --dry-run
 ```
 
 ---
@@ -158,6 +172,7 @@ Scans all configured providers (OpenRouter, NVIDIA NIM) to identify available fr
 ```bash
 walkie discover --coding-only      # List all free coding/reasoning models
 walkie discover --provider nvidia  # List models from a specific provider
+walkie health                      # Quick cached health check of all connections
 walkie status                      # Status dashboard of all connections
 walkie status --sweep              # Live sweep latency and probe connectivity
 ```
@@ -182,3 +197,31 @@ walkie evolve --context scratch/cot.json -m nvidia/z-ai/glm-5.2
   walkie evolve-restore AGENTS.md.20260713.bak   # Restore specific backup
   ```
 * **Use Case:** Permanently correct bad agent behaviors (such as searching test directories during a standard refactoring task or forgetting to verify imports) on-the-fly.
+
+### 4. Intelligent Fuzzy Resolver & Memory (`walkie resolve`)
+LWT tracks successful model connections in a local manifest (`~/.walkie/verified_models.json`). You can resolve partial or informal model names to their exact optimal route:
+```bash
+walkie resolve "GLM"
+# Output: nvidia/z-ai/glm-5.2
+```
+* **Capability Tiers:** If multiple matches are found, it uses parameter counts and tags to pick the highest tier (e.g. Flagship > Advanced > Mid).
+* **Semantic Versioning:** Prioritizes the latest version available (e.g., `4.5` > `4.20`).
+
+---
+
+## 💻 CLI Command Reference
+
+| Command | Description | Common Flags |
+|---|---|---|
+| `walkie setup` | Configure API keys via guided wizard | `-p, --provider` |
+| `walkie ask` | Direct prompt chat / query | `-m, --model`, `-p, --prompt`, `-a, --attach`, `--stream` |
+| `walkie consult` | AI-assisted code modification and patching | `-m, --model`, `-t, --task`, `-c, --chain-model`, `-L, --line-range` |
+| `walkie loop` | Multi-LLM autonomous debate & patch cycle | `--gen`, `--audit`, `--red`, `--stop-cmd` |
+| `walkie discover`| Scan and list available models | `--coding-only`, `--force`, `--json-output` |
+| `walkie resolve` | Resolve fuzzy model names to exact route | `--all`, `--json-output` |
+| `walkie status` | Display connection health and latencies | `--sweep` |
+| `walkie health` | Quick cached boolean health check | |
+| `walkie sandbox` | Manage isolated git worktree environments | `--create`, `--commit` |
+| `walkie map` | Generate workspace LLM context indices | |
+| `walkie evolve` | Inject self-improvement rules into AGENTS.md | `--context` |
+| `walkie ledger` | View token usage and cost accounting logs | `--days`, `--format` |

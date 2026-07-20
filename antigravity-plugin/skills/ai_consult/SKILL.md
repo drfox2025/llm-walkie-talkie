@@ -11,21 +11,59 @@ This skill instructs you (the IDE agent) on how to delegate complex coding, debu
 
 ---
 
-## Top 3 Free Coding Models (Live-Discovered, July 2026)
+## Discovering Available Free Models (Run Once Per Session)
 
-These are the best available models confirmed via `walkie discover --coding-only`:
+Before selecting a model, run discovery to get the **live** list of free coding models:
+```bash
+walkie discover --coding-only
+```
 
-| # | Canonical Name | Full Model ID | Context | Tags | Routes |
-|---|---|---|---|---|---|
-| 1 | `qwen3-coder` | `openrouter/qwen/qwen3-coder:free` | **1048K** | coding, reasoning | OpenRouter |
-| 2 | `laguna-m.1` | `openrouter/poolside/laguna-m.1:free` | 262K | coding, reasoning | OpenRouter |
-| 3 | `nemotron-3-ultra-550b-a55b` | `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` | **1000K** | reasoning | OpenRouter + NVIDIA |
+This lists all free coding models with context lengths, provider routes, and tags. Pick the best model based on:
+- **Context length**: Prefer ≥262K for large file refactoring
+- **Tags**: Prefer models tagged `coding` + `reasoning`
+- **Routes**: Models with 2+ routes have automatic failover
 
-**All 3 are FREE** — they require only an `OPENROUTER_API_KEY` (free at https://openrouter.ai/keys).
+For JSON output (programmatic use): `walkie discover --coding-only --json-output`
+To bypass 24h cache: `walkie discover --coding-only --force`
 
-*(Note: These free models are optimized for single-call 'consult' operations. To run a 'loop', ensure you use 3 distinct model vendors to satisfy the Start Guard)*
+**All discovered free models** require only a free API key from their provider (no credit card).
 
-**Multi-route bonus**: `qwen3-next-80b-a3b` and `gpt-oss-120b` are also available on BOTH OpenRouter and NVIDIA NIM simultaneously — the failover system will automatically use both.
+*(Note: Free models are optimized for single-call 'consult' operations. To run a 'loop', ensure you use 3 distinct model vendors to satisfy the Start Guard.)*
+
+---
+
+## Pre-Flight: Ensuring Provider Connectivity
+
+Before attempting any `walkie consult` or `walkie ask` command, check if at least one provider is configured:
+
+```bash
+walkie status
+```
+
+If ALL providers show `[GREY] No key`, guide the user through setup:
+
+1. **Recommend the fastest path**: Tell the user:
+   *"You need at least one free API key. The fastest option is OpenRouter — it gives you access to 50+ free models with no credit card required."*
+
+2. **Run the quickstart wizard**:
+   ```bash
+   walkie quickstart
+   ```
+
+3. **If the user wants more providers**: Run the full setup:
+   ```bash
+   walkie setup --provider nvidia      # For NVIDIA NIM (40 RPM free tier)
+   walkie setup --provider zenmux      # For ZenMux (GLM 5.2 access)
+   walkie setup --provider groq        # For Groq (ultra-low latency)
+   walkie setup --provider openrouter  # For OpenRouter (50+ free models)
+   ```
+
+4. **After setup succeeds**: Run discovery to confirm available models:
+   ```bash
+   walkie discover --coding-only
+   ```
+
+**IMPORTANT**: Never assume a provider is configured. Always check `walkie status` output before your first `consult` call in a session. If the status shows unconfigured providers, proactively inform the user which free options are available.
 
 ---
 
@@ -56,11 +94,72 @@ walkie map
 ```
 This generates a highly compressed `llm_context.yaml` and `.walkie/symbols_index.json`.
 
+### Step 0.75: Smart Model Resolution (When User Uses Informal Names)
+
+If the user mentions models by **informal name** (e.g., "GLM", "Grok", "Nemotron", "DeepSeek") without specifying the full `provider/org/model` path:
+
+1. **Use the resolve command:**
+   ```bash
+   walkie resolve "GLM"
+   walkie resolve "Grok"
+   walkie resolve "Nemotron"
+   ```
+   This reads `~/.walkie/verified_models.json` (the connection verification manifest, auto-updated on every successful API call and every `walkie status --sweep`) and returns the most capable verified model_id.
+
+2. **Resolution Rules:**
+   - Match the user's informal name against model families in the manifest
+   - If multiple variants exist for the same family, **always prefer the most advanced model** (highest capability tier, then highest parameter count, then most recent successful connection)
+   - **Never** use a lower-tier variant when a higher-tier variant has been successfully verified
+   - Example: "Nemotron" → `nemotron-3-ultra-550b-a55b` (NOT `nemotron-3-nano-30b-a3b`)
+   - Example: "Grok" → `grok-4.5` (NOT `grok-4.20`, since 4.5 > 4.20 in semver)
+
+3. **Strict Scope Rule — CRITICAL:**
+   - **Only use models the user explicitly named.** Do NOT explore or probe additional models.
+   - If the user says "consult with GLM and Grok", use ONLY GLM and Grok. Do NOT also try Gemini Flash, Poolside, Nemotron, or any other model.
+   - If a user-requested model is unavailable, **report the failure** and suggest alternatives from the manifest. Do NOT silently substitute.
+
+4. **To see all candidates for a name (for debugging):**
+   ```bash
+   walkie resolve "Grok" --all
+   ```
+
+### Cross-Model Insight Synthesis (Multi-Consultant Mode)
+
+When consulting **≥2 models** on the same task, after collecting all responses:
+- Identify **convergent findings** (issues flagged by ≥2 models) → mark as **HIGH CONFIDENCE**
+- Identify **unique findings** (flagged by only 1 model) → mark as **NEEDS VERIFICATION**
+- Structure the final report to highlight consensus vs. divergence
+- Weight convergent findings more heavily in implementation plans
+
 ### Step 2: Target the Issue
 
 Identify the target source file that needs modification. If modifying a large file (>200 lines), identify the precise `start-end` line numbers for the change to drastically cut token costs.
 
-### Step 3: Delegate and Patch
+### Step 3: Formulate the Structured Prompt
+When formulating the `--task` instruction or a `--prompt` file for LWT, ensure it adheres to the LWT XML Schema to get surgical patches:
+```xml
+<persona>
+You are a Senior Software Engineer and Surgical Code Patching Expert. You output strict, valid Unified Diffs. You do not apologize; you only output precise, minimal changes.
+</persona>
+
+<context>
+Project Language: [language]
+Architecture: [architecture description]
+Goal: [what the user wants to achieve]
+</context>
+
+<chain_of_thought>
+[Your native CoT plan goes here, detailing which files and logic to change]
+</chain_of_thought>
+
+<task_instructions>
+1. Review my <chain_of_thought> above. Briefly critique my plan and suggest improvements.
+2. Provide the exact Unified Diff patch to achieve the goal.
+3. Adhere strictly to the required output format.
+</task_instructions>
+```
+
+### Step 4: Delegate and Patch
 
 Use the automated `walkie consult` command to request modifications and patch the file directly.
 

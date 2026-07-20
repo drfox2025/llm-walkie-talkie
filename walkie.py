@@ -1290,6 +1290,7 @@ def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, d
                 try:
                     discovery.update_route_metrics(registry, route["model_id"], True, latency_ms)
                     discovery.save_registry(registry)
+                    discovery.update_verified_entry(route["model_id"], True)
                 except Exception:
                     pass
                 reply = resp.choices[0].message.content or ""
@@ -1301,12 +1302,9 @@ def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, d
                     discovery.save_registry(registry)
                 except Exception:
                     pass
-                msg = str(e).lower()
-                transient = ("429" in msg or "timeout" in msg or "timed out" in msg
-                             or " 5" in msg or "rate limit" in msg or "overloaded" in msg)
                 last_err = e
-                if not transient:
-                    break
+                if os.environ.get("WALKIE_DEBUG") == "1":
+                    click.secho(f"[DEBUG] Route {route.get('model_id')} failed: {e}. Trying next fallback...", fg="yellow", err=True)
         if last_err is not None:
             raise RuntimeError(safe_error_handler(last_err)) from None
 
@@ -1319,6 +1317,11 @@ def call_llm(model: str, messages: List[Dict[str, str]], **opts) -> Tuple[str, d
     try:
         resp = litellm.completion(**kwargs)
         reply = resp.choices[0].message.content or ""
+        try:
+            import discovery
+            discovery.update_verified_entry(model, True)
+        except Exception:
+            pass
         return reply, _extract_usage(resp)
     except Exception as e:
         raise RuntimeError(safe_error_handler(e)) from None
@@ -2049,6 +2052,10 @@ def status(sweep, json_output):
             fd = os.open(str(p), os.O_CREAT | os.O_WRONLY, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({"models": health_cache}, f)
+            # Also update verified_models.json for each successfully probed model
+            for res in results:
+                if res["status"] == "ok":
+                    disc.update_verified_entry(res["model"], True)
         except Exception:
             pass
     else:
@@ -2127,6 +2134,92 @@ def status(sweep, json_output):
 
     if not sweep:
         click.secho("\n  Tip: Run `walkie status --sweep` for a live probe of each provider.", fg="cyan", err=True)
+
+
+@cli.command("resolve")
+@click.argument("name")
+@click.option("--json-output", is_flag=True, help="Output as JSON.")
+@click.option("--all", "show_all", is_flag=True, help="Show all matching candidates, not just the best.")
+def resolve_cmd(name, json_output, show_all):
+    """Resolve an informal model name to the best available model_id.
+
+    Takes fuzzy names like 'GLM', 'Grok', 'Nemotron', 'DeepSeek' and resolves
+    them to the most capable verified model_id. Resolution prefers:
+    capability tier > parameter count > version > recency of last successful call.
+
+    \b
+    Examples:
+      walkie resolve GLM        → nvidia/z-ai/glm-5.2
+      walkie resolve Grok       → zenmux/x-ai/grok-4.5-free
+      walkie resolve Nemotron   → nvidia/nvidia/nemotron-3-ultra-550b-a55b
+      walkie resolve DeepSeek   → nvidia/deepseek-ai/deepseek-v4-pro
+    """
+    import discovery as disc
+
+    if show_all:
+        # Show all candidates with ranking info
+        manifest = disc.load_verified_manifest()
+        query = name.lower().strip()
+        candidates = []
+        for entry in manifest.get("verified_models", []):
+            family = entry.get("family", "")
+            model_id = entry.get("model_id", "")
+            canonical = disc.normalize_model_name(model_id).lower()
+            if family == query or query in canonical or query in model_id.lower():
+                candidates.append(entry)
+
+        if not candidates:
+            # Fall back to registry
+            registry = disc.load_registry()
+            for canonical, lm_entry in registry.get("logical_models", {}).items():
+                if query in canonical.lower() or query in lm_entry.get("display_name", "").lower():
+                    for route in lm_entry.get("routes", []):
+                        tier, param_b = disc.classify_capability_tier(route["model_id"])
+                        candidates.append({
+                            "family": disc.extract_model_family(route["model_id"]),
+                            "model_id": route["model_id"],
+                            "provider": route.get("provider", ""),
+                            "capability_tier": tier,
+                            "param_count_b": param_b,
+                            "last_verified_ok": route.get("last_checked"),
+                            "total_successful_calls": route.get("sample_count", 0),
+                        })
+
+        if json_output:
+            click.echo(json.dumps(candidates, indent=2))
+        elif candidates:
+            click.echo(f"\n  All candidates matching '{name}':\n")
+            click.echo(f"  {'Model ID':<55} {'Tier':<12} {'Params':<10} {'Provider':<14} {'Last OK'}")
+            click.echo("  " + "-" * 100)
+            for c in candidates:
+                param_str = f"{c.get('param_count_b')}B" if c.get('param_count_b') else "-"
+                last_ok = c.get("last_verified_ok", "-") or "-"
+                click.echo(
+                    f"  {c['model_id']:<55} {c.get('capability_tier','?'):<12} "
+                    f"{param_str:<10} {c.get('provider','?'):<14} {last_ok}"
+                )
+            click.echo("")
+        else:
+            click.secho(f"  No models found matching '{name}'.", fg="yellow")
+        return
+
+    # Standard resolve: return best match
+    result = disc.resolve_fuzzy_model(name)
+
+    if result:
+        if json_output:
+            click.echo(json.dumps({"query": name, "resolved_model_id": result}))
+        else:
+            click.secho(f"{result}", fg="green")
+    else:
+        if json_output:
+            click.echo(json.dumps({"query": name, "resolved_model_id": None, "error": "No match found"}))
+        else:
+            click.secho(f"[ERROR] No model found matching '{name}'.", fg="red", err=True)
+            click.secho("  Run `walkie discover --coding-only` to refresh available models.", fg="cyan", err=True)
+            click.secho("  Or run `walkie status --sweep` to update connection verification.", fg="cyan", err=True)
+        sys.exit(1)
+
 
 @cli.command("evolve")
 @click.option("--context", required=True, help="JSON string or file path containing the CoT abstract.")

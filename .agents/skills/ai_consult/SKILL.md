@@ -94,6 +94,43 @@ walkie map
 ```
 This generates a highly compressed `llm_context.yaml` and `.walkie/symbols_index.json`.
 
+### Step 0.75: Smart Model Resolution (When User Uses Informal Names)
+
+If the user mentions models by **informal name** (e.g., "GLM", "Grok", "Nemotron", "DeepSeek") without specifying the full `provider/org/model` path:
+
+1. **Use the resolve command:**
+   ```bash
+   walkie resolve "GLM"
+   walkie resolve "Grok"
+   walkie resolve "Nemotron"
+   ```
+   This reads `~/.walkie/verified_models.json` (the connection verification manifest, auto-updated on every successful API call and every `walkie status --sweep`) and returns the most capable verified model_id.
+
+2. **Resolution Rules:**
+   - Match the user's informal name against model families in the manifest
+   - If multiple variants exist for the same family, **always prefer the most advanced model** (highest capability tier, then highest parameter count, then most recent successful connection)
+   - **Never** use a lower-tier variant when a higher-tier variant has been successfully verified
+   - Example: "Nemotron" → `nemotron-3-ultra-550b-a55b` (NOT `nemotron-3-nano-30b-a3b`)
+   - Example: "Grok" → `grok-4.5` (NOT `grok-4.20`, since 4.5 > 4.20 in semver)
+
+3. **Strict Scope Rule — CRITICAL:**
+   - **Only use models the user explicitly named.** Do NOT explore or probe additional models.
+   - If the user says "consult with GLM and Grok", use ONLY GLM and Grok. Do NOT also try Gemini Flash, Poolside, Nemotron, or any other model.
+   - If a user-requested model is unavailable, **report the failure** and suggest alternatives from the manifest. Do NOT silently substitute.
+
+4. **To see all candidates for a name (for debugging):**
+   ```bash
+   walkie resolve "Grok" --all
+   ```
+
+### Cross-Model Insight Synthesis (Multi-Consultant Mode)
+
+When consulting **≥2 models** on the same task, after collecting all responses:
+- Identify **convergent findings** (issues flagged by ≥2 models) → mark as **HIGH CONFIDENCE**
+- Identify **unique findings** (flagged by only 1 model) → mark as **NEEDS VERIFICATION**
+- Structure the final report to highlight consensus vs. divergence
+- Weight convergent findings more heavily in implementation plans
+
 ### Step 2: Target the Issue
 
 Identify the target source file that needs modification. If modifying a large file (>200 lines), identify the precise `start-end` line numbers for the change to drastically cut token costs.

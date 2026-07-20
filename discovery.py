@@ -11,6 +11,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import contextlib
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,126 @@ def classify_model(model_id: str, description: str = "") -> List[str]:
     haystack = (model_id + " " + description).lower()
     return [tag for tag, keywords in TAG_KEYWORDS.items()
             if any(kw in haystack for kw in keywords)]
+
+
+# ── Capability tier classification ─────────────────────────────────────────────
+
+# Tier ordering: higher numeric score = more capable
+TIER_SCORES = {"flagship": 5, "advanced": 4, "mid": 3, "small": 2, "nano": 1}
+
+# Keywords that indicate capability tier (checked against lowercase model_id)
+_TIER_KEYWORDS = {
+    "flagship": ["ultra", "flagship", "opus", "pro", "max"],
+    "advanced": ["super", "advanced", "large", "plus", "sonnet"],
+    "small":    ["mini", "small", "lite", "haiku", "flash"],
+    "nano":     ["nano", "tiny", "micro"],
+}
+
+
+def classify_capability_tier(model_id: str, context_length: int = 0) -> Tuple[str, Optional[int]]:
+    """
+    Classify a model's capability tier and extract parameter count.
+
+    Returns (tier, param_count_billions).
+    Tiers: 'flagship' > 'advanced' > 'mid' > 'small' > 'nano'
+
+    Resolution priority:
+      1. Explicit tier keywords in model name (e.g. 'ultra' → flagship)
+      2. Parameter count suffix (e.g. '550b' → flagship if ≥200B)
+      3. Version number heuristic (higher version = more advanced)
+      4. Default: 'mid'
+    """
+    name = model_id.lower()
+
+    # Extract parameter count (e.g. '550b', '120b', '30b', '8b')
+    param_match = re.search(r'(\d+)b(?:-|$|[^a-z])', name)
+    param_b = int(param_match.group(1)) if param_match else None
+
+    # 1. Check explicit tier keywords
+    for tier, keywords in _TIER_KEYWORDS.items():
+        if any(kw in name for kw in keywords):
+            return tier, param_b
+
+    # 2. Infer from parameter count
+    if param_b is not None:
+        if param_b >= 200:
+            return "flagship", param_b
+        elif param_b >= 50:
+            return "advanced", param_b
+        elif param_b >= 20:
+            return "mid", param_b
+        elif param_b >= 5:
+            return "small", param_b
+        else:
+            return "nano", param_b
+
+    # 3. Default
+    return "mid", param_b
+
+
+def extract_model_family(model_id: str) -> str:
+    """
+    Extract the model family name from a model_id for fuzzy matching.
+
+    Examples:
+      nvidia/z-ai/glm-5.2          → glm
+      zenmux/x-ai/grok-4.5-free    → grok
+      nvidia/nvidia/nemotron-3-ultra-550b-a55b → nemotron
+      nvidia/deepseek-ai/deepseek-v4-pro       → deepseek
+      openrouter/qwen/qwen3-coder:free         → qwen
+    """
+    canonical = normalize_model_name(model_id)
+    # Match the core family name (first alphabetic segment of ≥2 chars)
+    family_match = re.match(r'^([a-z]{2,})', canonical)
+    if family_match:
+        return family_match.group(1)
+
+    # Fallback: if canonical is too short (e.g. 'v4-pro' from deepseek),
+    # extract org from the raw model_id path segments
+    raw = model_id.lower().strip()
+    parts = raw.split("/")
+    # Skip gateway prefix
+    known_gateways = {"openrouter", "nvidia", "zenmux", "groq", "gemini",
+                      "anthropic", "openai", "mistral", "cohere", "together", "hf"}
+    if len(parts) >= 2 and parts[0] in known_gateways:
+        parts = parts[1:]
+    if len(parts) >= 2:
+        org = parts[-2]
+        # Apply alias map
+        org = ORG_ALIASES.get(org, org)
+        org_family = re.match(r'^([a-z]{2,})', org)
+        if org_family:
+            return org_family.group(1)
+
+    return canonical
+
+
+def extract_version_score(model_id: str) -> float:
+    """
+    Extract a numeric version score from a model_id for comparison.
+    Higher score = more advanced version.
+
+    Version numbers are treated as decimal: 4.5 = 4.5, 4.20 = 4.2.
+    This matches xAI/GLM naming where grok-4.5 > grok-4.20 (4.5 > 4.2).
+
+    Examples:
+      grok-4.5  → 4.5
+      grok-4.20 → 4.2
+      glm-5.2   → 5.2
+      deepseek-v4-pro → 4.0
+    """
+    name = normalize_model_name(model_id).lower()
+    # Look for version patterns: X.Y, vX, or standalone numbers
+    ver_match = re.search(r'(?:^|[.-])v?(\d+)\.(\d+)', name)
+    if ver_match:
+        major = int(ver_match.group(1))
+        minor = int(ver_match.group(2))
+        # Treat as decimal: "4.5" → 4.5, "4.20" → 4.2, "5.2" → 5.2
+        return float(f"{major}.{minor}")
+    ver_match = re.search(r'(?:^|[.-])v?(\d+)', name)
+    if ver_match:
+        return float(ver_match.group(1))
+    return 0.0
 
 
 # ── Registry I/O ──────────────────────────────────────────────────────────────
@@ -527,3 +648,256 @@ def rank_free_models(
 
     results.sort(key=lambda x: (not x[2], -x[3], x[4]))
     return [(r[0], r[1]) for r in results]
+
+
+# ── Verified Models Manifest ──────────────────────────────────────────────────
+
+VERIFIED_PATH = CONFIG_DIR / "verified_models.json"
+
+
+@contextlib.contextmanager
+def verified_manifest_lock():
+    """Atomic folder-creation lock to prevent concurrent writes to the manifest."""
+    lock_dir = CONFIG_DIR / "verified_models.lock"
+    acquired = False
+    # Retries for up to 3 seconds
+    for _ in range(30):
+        try:
+            lock_dir.mkdir(exist_ok=False)
+            acquired = True
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                lock_dir.rmdir()
+            except Exception:
+                pass
+
+
+def load_verified_manifest() -> Dict[str, Any]:
+    """Load the verified models manifest from disk."""
+    try:
+        if VERIFIED_PATH.exists():
+            return json.loads(VERIFIED_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"last_updated": None, "verified_models": []}
+
+
+def save_verified_manifest(data: Dict[str, Any]) -> None:
+    """Atomically write the verified models manifest."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data["last_updated"] = _now()
+    tmp = VERIFIED_PATH.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, VERIFIED_PATH)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def update_verified_entry(model_id: str, success: bool) -> None:
+    """
+    Update or create a verified_models.json entry after an API call.
+    Only records successful connections (sets last_verified_ok timestamp).
+    """
+    if not success:
+        return
+
+    with verified_manifest_lock():
+        manifest = load_verified_manifest()
+        models = manifest.get("verified_models", [])
+
+    # Find existing entry
+    existing = None
+    for entry in models:
+        if entry.get("model_id") == model_id:
+            existing = entry
+            break
+
+    registry = load_registry()
+    # Find the route info from model registry
+    tags = []
+    ctx_len = 0
+    provider = ""
+    for _canonical, lm_entry in registry.get("logical_models", {}).items():
+        for route in lm_entry.get("routes", []):
+            if route["model_id"] == model_id:
+                tags = lm_entry.get("tags", [])
+                ctx_len = route.get("context_length", 0)
+                provider = route.get("provider", "")
+                break
+        if provider:
+            break
+
+    # If not found in registry, infer from model_id
+    if not provider:
+        parts = model_id.split("/")
+        if len(parts) >= 2:
+            provider = parts[0].upper()
+        tags = classify_model(model_id)
+
+    family = extract_model_family(model_id)
+    tier, param_b = classify_capability_tier(model_id, ctx_len)
+    # Infer variant from canonical name
+    canonical = normalize_model_name(model_id)
+    variant = canonical.replace(family, "").strip("-").strip() or canonical
+
+    now = _now()
+
+    if existing:
+        existing["last_verified_ok"] = now
+        existing["total_successful_calls"] = existing.get("total_successful_calls", 0) + 1
+        existing["capability_tier"] = tier
+        existing["param_count_b"] = param_b
+        if ctx_len:
+            existing["context_length"] = ctx_len
+        if tags:
+            existing["tags"] = tags
+    else:
+        models.append({
+            "family": family,
+            "variant": variant,
+            "model_id": model_id,
+            "provider": provider,
+            "capability_tier": tier,
+            "param_count_b": param_b,
+            "context_length": ctx_len,
+            "last_verified_ok": now,
+            "total_successful_calls": 1,
+            "tags": tags,
+        })
+
+    manifest["verified_models"] = models
+    save_verified_manifest(manifest)
+
+
+def resolve_fuzzy_model(user_name: str) -> Optional[str]:
+    """
+    Resolve a fuzzy/informal user model name to the best verified model_id.
+
+    Resolution algorithm:
+      1. Normalize user input to lowercase
+      2. Search verified_models.json for entries where 'family' matches
+      3. If multiple matches: rank by capability_tier > param_count > version > recency
+      4. If no verified matches: fall back to model_registry.json
+      5. Return the best model_id string, or None if no match
+
+    Examples:
+      "GLM"       → nvidia/z-ai/glm-5.2
+      "Grok"      → zenmux/x-ai/grok-4.5-free (flagship > mid-tier)
+      "Nemotron"  → nvidia/nvidia/nemotron-3-ultra-550b-a55b (550B > 30B)
+    """
+    query = user_name.lower().strip()
+    if not query:
+        return None
+
+    # ── Phase 1: Search verified manifest ──
+    manifest = load_verified_manifest()
+    candidates = []
+    for entry in manifest.get("verified_models", []):
+        family = entry.get("family", "")
+        model_id = entry.get("model_id", "")
+        canonical = normalize_model_name(model_id).lower()
+
+        # Match: family equals query, or query is a substring of canonical/model_id
+        if family == query or query in canonical or query in model_id.lower():
+            candidates.append(entry)
+
+    if candidates:
+        # Rank: tier score (desc) → param_count (desc) → version (desc) → recency (desc)
+        def rank_key(e):
+            tier_score = TIER_SCORES.get(e.get("capability_tier", "mid"), 3)
+            param = e.get("param_count_b") or 0
+            version = extract_version_score(e.get("model_id", ""))
+            recency = e.get("last_verified_ok", "")
+            return (-tier_score, -param, -version, recency)  # Sort ascending → best first
+
+        candidates.sort(key=rank_key)
+        return candidates[0]["model_id"]
+
+    # ── Phase 2: Fall back to model registry ──
+    registry = load_registry()
+    reg_candidates = []
+    for canonical, entry in registry.get("logical_models", {}).items():
+        if query in canonical.lower() or query in entry.get("display_name", "").lower():
+            routes = entry.get("routes", [])
+            # Only consider routes with configured API keys
+            valid_routes = _filter_with_keys(routes)
+            if not valid_routes:
+                valid_routes = routes  # Fall back to all routes if none have keys
+            if valid_routes:
+                tier, param_b = classify_capability_tier(valid_routes[0]["model_id"])
+                reg_candidates.append({
+                    "model_id": valid_routes[0]["model_id"],
+                    "tier": tier,
+                    "param_b": param_b or 0,
+                    "version": extract_version_score(valid_routes[0]["model_id"]),
+                })
+
+    if reg_candidates:
+        def reg_rank(e):
+            return (-TIER_SCORES.get(e["tier"], 3), -e["param_b"], -e["version"])
+        reg_candidates.sort(key=reg_rank)
+        return reg_candidates[0]["model_id"]
+
+    return None
+
+
+def suggest_vendor_diverse_models(
+    count: int = 3,
+    use_case: str = "coding",
+) -> List[Dict[str, str]]:
+    """
+    Suggest a vendor-diverse set of models for llm-loop's 3-vendor requirement.
+    Returns list of dicts with 'model_id', 'provider', 'role' keys.
+    """
+    manifest = load_verified_manifest()
+    models = manifest.get("verified_models", [])
+
+    # Filter to models that were recently verified OK
+    alive = [m for m in models if m.get("last_verified_ok")]
+
+    # Group by provider
+    by_provider: Dict[str, List[Dict]] = {}
+    for m in alive:
+        p = m.get("provider", "UNKNOWN")
+        by_provider.setdefault(p, []).append(m)
+
+    # Pick the best model from each provider (by tier, then recency)
+    best_per_provider = []
+    for provider, provider_models in by_provider.items():
+        provider_models.sort(
+            key=lambda e: (
+                -TIER_SCORES.get(e.get("capability_tier", "mid"), 3),
+                -(e.get("param_count_b") or 0),
+            )
+        )
+        best_per_provider.append({
+            "model_id": provider_models[0]["model_id"],
+            "provider": provider,
+            "tier": provider_models[0].get("capability_tier", "mid"),
+        })
+
+    # Sort providers by tier of their best model
+    best_per_provider.sort(key=lambda e: -TIER_SCORES.get(e["tier"], 3))
+
+    # Assign roles: gen (best), audit (second best), redteam (third)
+    roles = ["gen-model", "audit-model", "redteam-model"]
+    result = []
+    for i, entry in enumerate(best_per_provider[:count]):
+        result.append({
+            "model_id": entry["model_id"],
+            "provider": entry["provider"],
+            "role": roles[i] if i < len(roles) else f"extra-{i}",
+        })
+
+    return result
+
